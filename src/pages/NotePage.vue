@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   noteById,
@@ -16,6 +16,7 @@ import BlockView from '../components/BlockView.vue'
 import BlockEdit from '../components/BlockEdit.vue'
 import AiBlockDialog from '../components/AiBlockDialog.vue'
 import AiNoteDialog from '../components/AiNoteDialog.vue'
+import OcrDialog from '../components/OcrDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -98,15 +99,24 @@ const ADD = [
   ['todo', '待补', { text: '' }],
 ]
 
+// 段尾插入位置：有块就接在最后一个块后面，空段就接在标题后面
+const sectionEndAt = (section) => {
+  const blocks = note.value.blocks
+  if (!section) return blocks.length
+  if (section.items.length) return Math.min(section.items[section.items.length - 1].index + 1, blocks.length)
+  if (section.heading) return Math.min(section.heading.index + 1, blocks.length)
+  return blocks.length
+}
+
+const spliceAtSectionEnd = (section, patch) => {
+  if (!note.value) return
+  note.value.blocks.splice(sectionEndAt(section), 0, { id: newBlockId(), ...patch })
+}
+
 const addBlock = (type, section) => {
   const def = ADD.find((a) => a[0] === type)
   if (!def || !note.value) return
-  const blocks = note.value.blocks
-  let at
-  if (!section.heading) at = 0
-  else if (section.items.length) at = section.items[section.items.length - 1].index + 1
-  else at = section.heading.index + 1
-  blocks.splice(at, 0, { id: newBlockId(), type, ...structuredClone(def[2]) })
+  spliceAtSectionEnd(section, { type, ...structuredClone(def[2]) })
 }
 
 const moveBlock = (i, delta) => {
@@ -144,6 +154,54 @@ const insertAfter = (index, patch) => {
   if (!note.value || !patch) return
   note.value.blocks.splice(index + 1, 0, { id: newBlockId(), ...patch })
 }
+
+/* ---------- 识图：截图 → 公式 / 段落 ---------- */
+const ocrOpen = ref(false)
+const ocrSrc = ref('')
+const ocrSec = ref(null)
+
+// 光标在哪一段里，就往哪一段末尾插；找不到就退回第一段
+const secAtFocus = () => {
+  const el = document.activeElement
+  const box = el && typeof el.closest === 'function' ? el.closest('.ed-section') : null
+  const si = box ? Number(box.dataset.si) : NaN
+  return Number.isInteger(si) ? sections.value[si] || null : null
+}
+
+const openOcr = (section = null, src = '') => {
+  ocrSec.value = section || secAtFocus() || sections.value[0] || null
+  ocrSrc.value = src
+  ocrOpen.value = true
+}
+
+const ocrWhere = computed(() => {
+  const t = ocrSec.value?.heading?.block?.text
+  return t ? `「${t}」这段的末尾` : '文末'
+})
+
+const applyOcr = (patch) => {
+  if (!patch) return
+  spliceAtSectionEnd(ocrSec.value, patch)
+  mode.value = 'edit'
+}
+
+// 编辑态下随便哪个输入框里按 Ctrl+V 粘截图，都直接进识图
+const pasteImage = (e) =>
+  [...(e.clipboardData?.items || [])]
+    .filter((it) => it.kind === 'file' && String(it.type).startsWith('image/'))
+    .map((it) => it.getAsFile())
+    .find(Boolean)
+
+const onPaste = (e) => {
+  if (mode.value !== 'edit' || ocrOpen.value || !note.value) return
+  const f = pasteImage(e)
+  if (!f) return
+  e.preventDefault()
+  openOcr(null, f)
+}
+
+onMounted(() => window.addEventListener('paste', onPaste))
+onBeforeUnmount(() => window.removeEventListener('paste', onPaste))
 
 const applyAi = ({ action, blocks }) => {
   if (!aiTarget.value) return
@@ -215,9 +273,15 @@ const del = () => {
       <p class="ed-tip">
         两条轴别混：<strong>段落是叙事位置</strong>（你在论证的哪一步），<strong>块是信息形态</strong>（这条知识长什么样）。
         同一个概念卡，解释「是什么」就放核心结论段，支撑「凭什么」就放推导段。点分区末尾的 + 决定它落在哪一段。
+        公式懒得手打就截图按 <kbd>Ctrl</kbd>+<kbd>V</kbd>，识别完核对再插。
       </p>
       <div class="blocks">
-        <section v-for="(sec, si) in sections" :key="si" class="ed-section">
+        <section
+          v-for="(sec, si) in sections"
+          :key="si"
+          class="ed-section"
+          :data-si="si"
+        >
           <BlockEdit
             v-if="sec.heading"
             :block="sec.heading.block"
@@ -238,6 +302,9 @@ const del = () => {
             <span class="adder-label">在此段加</span>
             <button v-for="a in ADD" :key="a[0]" class="chip-btn" @click="addBlock(a[0], sec)">
               + {{ a[1] }}
+            </button>
+            <button class="chip-btn" title="截图 → 公式，不用手打" @click="openOcr(sec)">
+              📷 识图
             </button>
           </div>
         </section>
@@ -265,6 +332,14 @@ const del = () => {
       :note="note"
       @close="wholeAi = false"
       @applied="mode = 'edit'"
+    />
+
+    <OcrDialog
+      :open="ocrOpen"
+      :src="ocrSrc"
+      :where="ocrWhere"
+      @close="ocrOpen = false"
+      @insert="applyOcr"
     />
   </section>
   <p v-else class="page">找不到这篇笔记</p>

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import katex from 'katex'
-import { loadAI, isAiReady, ocrImage } from '../lib/ai.js'
+import OcrDialog from './OcrDialog.vue'
 
 const props = defineProps({
   block: { type: Object, required: true },
@@ -19,68 +19,9 @@ const preview = computed(() => {
   }
 })
 
-/* ---------- 图片：让视觉模型把式子抄出来 ---------- */
+/* ---------- 图片：识图交给 OcrDialog（本地截图 / 粘贴都行） ---------- */
 
-const filePick = ref(null)
-const ocrBusy = ref(false)
-const ocrMsg = ref('')
-const ocrBad = ref(false)
-const ocrResult = ref(null)
-
-const ocrPreview = computed(() => {
-  const latex = ocrResult.value?.latex
-  if (!latex) return ''
-  try {
-    return katex.renderToString(latex, { displayMode: true, throwOnError: false })
-  } catch {
-    return ''
-  }
-})
-
-const detect = async () => {
-  ocrMsg.value = ''
-  ocrBad.value = false
-  ocrResult.value = null
-  if (!isAiReady(loadAI().vision)) {
-    ocrMsg.value = '还没配视觉模型：顶栏 ✨ → 设置 → 视觉模型（智谱 glm-4v-flash 免费）'
-    ocrBad.value = true
-    return
-  }
-  if (props.block.src) return runOcr(props.block.src)
-  filePick.value && filePick.value.click()
-}
-
-const runOcr = async (source) => {
-  ocrBusy.value = true
-  ocrMsg.value = ''
-  ocrBad.value = false
-  ocrResult.value = null
-  try {
-    ocrResult.value = await ocrImage({ src: source, cfg: loadAI() })
-  } catch (e) {
-    const m = String(e.message || e)
-    ocrMsg.value = /Failed to fetch|NetworkError|CORS|读不到/i.test(m)
-      ? '这个链接不让别的网站读图，直接选本地的文件识别。'
-      : m
-    ocrBad.value = true
-  } finally {
-    ocrBusy.value = false
-  }
-}
-
-const onFile = (e) => {
-  const f = e.target.files && e.target.files[0]
-  e.target.value = ''
-  if (f) runOcr(f)
-}
-
-const insertResult = () => {
-  const r = ocrResult.value
-  if (!r) return
-  if (r.kind === 'formula') emit('insert', { type: 'formula', latex: r.latex, text: r.text })
-  else emit('insert', { type: 'paragraph', text: r.text })
-  ocrResult.value = null
-}
+const ocrOpen = ref(false)
 
 const LABELS = {
   paragraph: '段落',
@@ -187,42 +128,24 @@ const LABELS = {
       <div v-if="block.src" class="ed-preview ed-img-preview">
         <img :src="block.src" alt="" loading="lazy" referrerpolicy="no-referrer" />
       </div>
-      <p class="ed-hint">本地截图没法直接传：先拖进 GitHub 任意一个 issue 的输入框，它会生成一串
-        <code>user-attachments</code> 链接，复制粘到这里。那链接永久有效，也不用 token。</p>
+      <p class="ed-hint">本地截图：点下面「识图」拖进来或直接 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴，识别完先核对再插。
+        想把图本身留在笔记里当凭证，就把截图拖进 GitHub 任意 issue 输入框，会生成一串
+        <code>user-attachments</code> 链接，粘到上面那行。</p>
 
       <div class="ed-ocr-acts">
-        <button class="chip-btn" :disabled="ocrBusy" @click="detect">
-          {{ ocrBusy ? '识别中…' : '🔍 识图 · 抄成公式' }}
+        <button class="chip-btn" @click="ocrOpen = true">
+          🔍 识图 · 把图里的式子抄成公式
         </button>
-        <button class="chip-btn" :disabled="ocrBusy" @click="filePick && filePick.click()">
-          选本地图片
-        </button>
-        <input ref="filePick" type="file" accept="image/*" hidden @change="onFile" />
-        <span class="ed-ocr-note">不想手打公式就用它；发出去前可以先改</span>
+        <span class="ed-ocr-note">公式不用再手打</span>
       </div>
 
-      <p v-if="ocrMsg" class="ai-msg" :class="{ bad: ocrBad }">{{ ocrMsg }}</p>
-
-      <div v-if="ocrResult" class="ed-ocr">
-        <template v-if="ocrResult.kind === 'formula'">
-          <p class="ed-hint">识别成公式了，核对一下 LaTeX（可以直接改）：</p>
-          <textarea v-model="ocrResult.latex" class="inp inp-mono inp-text" rows="3" />
-          <div v-if="ocrPreview" class="ed-preview" v-html="ocrPreview"></div>
-          <input v-model="ocrResult.text" class="inp" placeholder="一句话说这是什么（可选）" />
-          <div class="ed-ocr-acts">
-            <button class="chip-btn" @click="insertResult">+ 在下方插入公式块</button>
-            <button class="chip-btn" @click="ocrResult = null">放弃</button>
-          </div>
-        </template>
-        <template v-else>
-          <p class="ed-hint">识别成文字了，核对一下：</p>
-          <textarea v-model="ocrResult.text" class="inp inp-text" rows="4" />
-          <div class="ed-ocr-acts">
-            <button class="chip-btn" @click="insertResult">+ 在下方插入段落</button>
-            <button class="chip-btn" @click="ocrResult = null">放弃</button>
-          </div>
-        </template>
-      </div>
+      <OcrDialog
+        :open="ocrOpen"
+        :src="block.src"
+        :where="'这个图片块下面一格'"
+        @close="ocrOpen = false"
+        @insert="(patch) => emit('insert', patch)"
+      />
     </template>
 
     <template v-else-if="block.type === 'code'">

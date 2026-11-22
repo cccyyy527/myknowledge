@@ -645,6 +645,22 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .ed-ocr .inp { margin-top: 6px; }
 .ed-ocr .ed-preview { margin-top: 8px; }
 
+/* 识图弹窗的拖放区 */
+.ocr-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; margin-top: 12px; padding: 22px 16px; min-height: 96px;
+  border: 1.5px dashed var(--line); border-radius: 10px; background: var(--bg);
+  cursor: pointer; text-align: center;
+}
+.ocr-drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.ocr-drop.busy { cursor: progress; opacity: 0.75; }
+.ocr-drop-main { font-size: 13px; color: var(--ink-2); }
+.ocr-drop-sub { font-size: 11.5px; line-height: 1.7; color: var(--ink-3); }
+.ocr-drop kbd, .ed-tip kbd, .ed-hint kbd {
+  font-family: var(--mono); font-size: 10.5px; padding: 1px 4px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+}
+
 /* 整篇助手的改动预览：保留 / 改 / 新 / 删 */
 /* 整篇助手的 diff 跟外层对话框一起滚，不再套一层小滚动框 */
 .ai-preview.ai-diff {

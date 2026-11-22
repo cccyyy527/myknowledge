@@ -55,7 +55,7 @@ const doPull = () =>
     applyRemote(r.snapshot)
     emit('synced')
     const t = r.snapshot.updatedAt ? new Date(r.snapshot.updatedAt).toLocaleString() : '未知时间'
-    say(`已用云端数据覆盖本地（云端修改于 ${t}）`)
+    say(r.legacy ? `已读入云端的老格式 kb.json（修改于 ${t}），下次上传会自动按域拆开` : `已用云端数据覆盖本地（云端修改于 ${t}）`)
   })
 
 const doPush = () =>

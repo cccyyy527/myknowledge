@@ -43,7 +43,7 @@ const pullQuiet = async () => {
     if (!r) return
     quietUntil = Date.now() + 800
     if (r.changed && r.snapshot) applyRemote(r.snapshot)
-    syncTip.value = r.legacy ? '已按域拆分云端的 kb.json' : '已拉取云端'
+    syncTip.value = r.legacy ? '云端还是老的单文件格式，下次保存会按域拆开' : '已拉取云端'
   } catch (e) {
     syncTip.value = '拉取失败，检查同步配置'
   }

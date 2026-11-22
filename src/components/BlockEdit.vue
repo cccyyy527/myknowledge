@@ -19,6 +19,17 @@ const preview = computed(() => {
   }
 })
 
+/* ---------- 多行输入框跟着内容长高，框里不要再上下滚 ---------- */
+const grow = (el) => {
+  if (!el || el.tagName !== 'TEXTAREA') return
+  el.classList.add('grow-ta')
+  el.style.height = 'auto'
+  // box-sizing 是 border-box，scrollHeight 不含边框，得补回
+  el.style.height = el.scrollHeight + (el.offsetHeight - el.clientHeight) + 'px'
+}
+
+const vGrow = { mounted: grow, updated: grow }
+
 /* ---------- 图片：识图交给 OcrDialog（本地截图 / 粘贴都行） ---------- */
 
 const ocrOpen = ref(false)
@@ -65,7 +76,7 @@ const LABELS = {
     </template>
 
     <template v-else-if="block.type === 'paragraph'">
-      <textarea v-model="block.text" class="inp inp-text" rows="2" placeholder="写点内容…" />
+      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="写点内容…" />
     </template>
 
     <template v-else-if="block.type === 'callout'">
@@ -73,19 +84,19 @@ const LABELS = {
         <option value="tip">提示</option>
         <option value="warn">注意</option>
       </select>
-      <textarea v-model="block.text" class="inp inp-text" rows="2" placeholder="提示内容" />
+      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="提示内容" />
     </template>
 
     <template v-else-if="block.type === 'formula'">
       <input v-model="block.latex" class="inp inp-mono" placeholder="LaTeX，例如 \operatorname{Var}(Y)" />
       <div v-if="preview" class="ed-preview" v-html="preview"></div>
-      <textarea v-model="block.text" class="inp inp-text" rows="2" placeholder="变量说明 / 解读" />
+      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="变量说明 / 解读" />
     </template>
 
     <template v-else-if="block.type === 'definition'">
       <input v-model="block.term" class="inp" placeholder="术语" />
-      <textarea v-model="block.text" class="inp inp-text" rows="2" placeholder="一句话定义" />
-      <textarea v-model="block.detail" class="inp inp-text" rows="2" placeholder="展开细节（可选）" />
+      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="一句话定义" />
+      <textarea v-model="block.detail" v-grow class="inp inp-text" rows="2" placeholder="展开细节（可选）" />
     </template>
 
     <template v-else-if="block.type === 'steps'">
@@ -115,13 +126,13 @@ const LABELS = {
 
     <template v-else-if="block.type === 'qa'">
       <input v-model="block.question" class="inp" placeholder="问题" />
-      <textarea v-model="block.answer" class="inp inp-text" rows="3" placeholder="答案" />
+      <textarea v-model="block.answer" v-grow class="inp inp-text" rows="3" placeholder="答案" />
     </template>
 
     <template v-else-if="block.type === 'pitfall'">
-      <textarea v-model="block.text" class="inp inp-text" rows="2" placeholder="现象：哪里砸了" />
-      <textarea v-model="block.cause" class="inp inp-text" rows="2" placeholder="原因" />
-      <textarea v-model="block.avoid" class="inp inp-text" rows="2" placeholder="怎么避免" />
+      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="现象：哪里砸了" />
+      <textarea v-model="block.cause" v-grow class="inp inp-text" rows="2" placeholder="原因" />
+      <textarea v-model="block.avoid" v-grow class="inp inp-text" rows="2" placeholder="怎么避免" />
     </template>
 
     <template v-else-if="block.type === 'todo'">
@@ -155,7 +166,7 @@ const LABELS = {
     </template>
 
     <template v-else-if="block.type === 'code'">
-      <textarea v-model="block.text" class="inp inp-mono inp-text" rows="3" placeholder="代码" />
+      <textarea v-model="block.text" v-grow class="inp inp-mono inp-text" rows="3" placeholder="代码" />
     </template>
 
     <template v-else-if="block.type === 'bulletList'">
@@ -170,7 +181,7 @@ const LABELS = {
     </template>
 
     <template v-else>
-      <textarea v-model="block.text" class="inp inp-text" rows="2" />
+      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" />
     </template>
   </div>
 </template>

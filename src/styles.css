@@ -271,6 +271,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .inp-mono { font-family: var(--mono); font-size: 12.5px; }
 .inp-mini { width: auto; min-width: 110px; }
 .inp-text { line-height: 1.6; }
+.inp.grow-ta { overflow-y: hidden; resize: none; }
 .ed-preview { background: #fff; border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; overflow-x: auto; overflow-y: hidden; }
 .ed-preview :where(.katex-display) { margin: 0; }
 .ed-img-preview img { display: block; max-width: 100%; height: auto; border-radius: 4px; }

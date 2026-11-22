@@ -508,3 +508,53 @@ code { font-family: var(--mono); font-size: 0.9em; }
   .ai-box { max-width: none; max-height: 94vh; border-radius: 14px 14px 0 0; padding: 16px 14px 22px; }
   .ai-preview { max-height: 34vh; }
 }
+
+/* ---------- AI：问库里 ---------- */
+.ask-sugs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.ask-sug {
+  font-size: 12px; line-height: 1.4; padding: 5px 10px; text-align: left;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  color: var(--ink-2); cursor: pointer;
+}
+.ask-sug:hover { border-color: var(--accent); color: var(--accent); }
+.ask-thread { max-height: 46vh; overflow: auto; margin: 0 -4px; padding: 0 4px; }
+.ask-thread:empty { display: none; }
+.ask-turn { padding: 10px 0; border-top: 1px dashed var(--line); }
+.ask-turn:first-child { border-top: 0; padding-top: 2px; }
+.ask-q { font-size: 13px; font-weight: 600; line-height: 1.6; color: var(--ink); margin-bottom: 6px; }
+.ask-q::before { content: "Q "; font-family: var(--mono); font-size: 11px; color: var(--accent); }
+.ask-a { font-size: 13px; line-height: 1.75; color: var(--ink); padding-left: 15px; }
+.ask-text { white-space: pre-wrap; word-break: break-word; }
+.ask-text :first-child { margin-top: 0; }
+.ask-text code {
+  font-family: var(--mono); font-size: 11.5px; background: #f6f5f3;
+  padding: 1px 5px; border-radius: 4px;
+}
+.ask-caret { display: inline-block; color: var(--accent); animation: ask-blink 1s step-end infinite; }
+@keyframes ask-blink { 50% { opacity: 0; } }
+.ask-cite {
+  font-family: var(--mono); font-size: 10.5px; line-height: 1; vertical-align: super;
+  padding: 1px 3px; margin: 0 1px; border: 0; border-radius: 3px;
+  background: var(--accent-soft); color: var(--accent); cursor: pointer;
+}
+.ask-cite:hover { background: var(--accent); color: #fff; }
+.ask-src { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ask-chip {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  font-size: 11.5px; line-height: 1.5; padding: 3px 9px 3px 4px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  color: var(--ink-2); cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.ask-chip:hover { border-color: var(--accent); color: var(--accent); }
+.ask-chip-n {
+  flex: none; font-family: var(--mono); font-size: 10px; width: 15px; height: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+}
+.ask-none { font-size: 11.5px; color: var(--ink-3); margin: 8px 0 0; }
+.ask-input { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ask-input .ai-area { resize: none; }
+
+@media (max-width: 860px) {
+  .ask-thread { max-height: 40vh; }
+}

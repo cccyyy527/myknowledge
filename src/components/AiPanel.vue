@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { state, createNote, topicPath, flattenTopics } from '../lib/store.js'
 import { loadAI, saveAI, clearAI, isAiReady, composeNote, assembleBlocks, ping } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
+import AiAsk from './AiAsk.vue'
 
 const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close'])
@@ -116,6 +117,7 @@ const forget = () => {
 
       <div class="ai-tabs">
         <button :class="{ on: tab === 'compose' }" @click="tab = 'compose'">收进来</button>
+        <button :class="{ on: tab === 'ask' }" @click="tab = 'ask'">问库里</button>
         <button :class="{ on: tab === 'setup' }" @click="tab = 'setup'">设置</button>
       </div>
 
@@ -172,6 +174,9 @@ const forget = () => {
           </div>
         </template>
       </template>
+
+      <!-- 问库里 -->
+      <AiAsk v-else-if="tab === 'ask'" @close="emit('close')" @setup="tab = 'setup'" />
 
       <!-- 设置 -->
       <template v-else>

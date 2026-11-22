@@ -1,6 +1,7 @@
 // AI 接入：OpenAI 兼容的 /chat/completions
 // key 只存本机 localStorage，和云同步 token 同一套信任模型
 import { state } from './store.js'
+import { buildContext } from './retrieve.js'
 
 const CFG_KEY = 'myknowledge.ai'
 
@@ -61,6 +62,60 @@ export async function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000 
   const text = json?.choices?.[0]?.message?.content
   if (!text) throw new Error('模型没有返回内容')
   return text
+}
+
+// 同一套接口的流式版本：边收边显示，长答案不用干等
+export async function chatStream(
+  messages,
+  { cfg, temperature = 0.3, maxTokens = 2000, onDelta, signal } = {},
+) {
+  const c = cfg || loadAI()
+  if (!isAiReady(c)) throw new Error('还没填 API Key，先到「设置」里配一下')
+  const res = await fetch(endpoint(c.base), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${c.key}`,
+    },
+    body: JSON.stringify({
+      model: c.model,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    }),
+    signal,
+  })
+  if (!res.ok) throw new Error(await errText(res))
+
+  const reader = res.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  let full = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() || ''
+    for (const line of lines) {
+      const s = line.trim()
+      if (!s.startsWith('data:')) continue
+      const payload = s.slice(5).trim()
+      if (!payload || payload === '[DONE]') continue
+      let delta = ''
+      try {
+        delta = JSON.parse(payload)?.choices?.[0]?.delta?.content || ''
+      } catch {
+        continue
+      }
+      if (!delta) continue
+      full += delta
+      onDelta && onDelta(delta, full)
+    }
+  }
+  if (!full) throw new Error('模型没有返回内容')
+  return full
 }
 
 // 模型有时会包 ```json 或者前后加解释，这里只取中间那个对象
@@ -349,4 +404,39 @@ export async function ping(cfg) {
     { cfg, temperature: 0, maxTokens: 8 },
   )
   return text.trim()
+}
+
+/* ---------- L3：问整个知识库 ---------- */
+
+const ASK_SYSTEM = `你是这个私人知识库的问答助手。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记。
+
+规则：
+- 只依据「资料」回答。资料里没写的，直接说「库里还没有」，再补一句最接近的是哪一篇、还缺什么。
+- 不要编造数字、论文名、公司案例。用户笔记里没有的具体数字不要补。
+- 每条具体结论后面标来源，写成 [1]、[2]，编号必须是资料里出现过的编号。纯常识的过渡句可以不标。
+- 中文，先给结论再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。
+- 用户问「有哪些 / 列一下」时，把资料里相关的都列出来，一条一行，每条都带来源。
+- 用户的笔记互相矛盾时，指出来是哪两篇、分别怎么写的，不要替他和稀泥。`
+
+export async function askLibrary({ question, history = [], cfg, onDelta, signal } = {}) {
+  const { empty, text: ctx, used, fallback } = buildContext(question)
+  if (empty) throw new Error('库里还没有笔记，先写一篇再来问')
+
+  const head = fallback
+    ? `资料（没有明显命中，下面是最近改过的几篇；如果都不相关就直说库里没有）：`
+    : `资料（从用户知识库里检索出来的 ${used.length} 篇）：`
+  const messages = [
+    { role: 'system', content: `${ASK_SYSTEM}\n\n${head}\n${ctx}` },
+    ...history.slice(-6),
+    { role: 'user', content: question },
+  ]
+
+  const text = await chatStream(messages, {
+    cfg,
+    temperature: 0.2,
+    maxTokens: 1600,
+    onDelta,
+    signal,
+  })
+  return { text, used, fallback }
 }

@@ -6,6 +6,7 @@ const props = defineProps({
   block: { type: Object, required: true },
   expand: { type: Boolean, default: false },
 })
+const emit = defineEmits(['open-note'])
 
 const failed = ref(false)
 watch(
@@ -26,6 +27,34 @@ const html = computed(() => {
     return ''
   }
 })
+
+const esc = (s) =>
+  String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+
+// 问答卡的答案正文里可能带 [1] [2]，存的时候把出处 id 一起记在 block.refs 里，
+// 这里再把它变回可点的引用 chip；没有 refs 的老笔记就当纯文本渲染
+const qaHtml = computed(() => {
+  const b = props.block
+  if (b.type !== 'qa') return ''
+  const refs = b.refs || []
+  let s = esc(b.answer || '')
+  if (refs.length) {
+    s = s.replace(/\[(\d+)\]/g, (m, d) => {
+      const r = refs[Number(d) - 1]
+      return r ? `<button class="qa-cite" data-note="${esc(r.id)}" title="${esc(r.title)}">${d}</button>` : m
+    })
+  }
+  return s
+})
+
+const onQaClick = (e) => {
+  const el = e.target.closest?.('.qa-cite')
+  if (el && el.dataset.note) emit('open-note', el.dataset.note)
+}
 </script>
 
 <template>
@@ -88,7 +117,7 @@ const html = computed(() => {
 
   <details v-else-if="block.type === 'qa'" class="blk-qa" :open="expand">
     <summary><span class="qa-badge">Q</span>{{ block.question || '（未填问题）' }}</summary>
-    <div class="qa-a">{{ block.answer }}</div>
+    <div class="qa-a" @click="onQaClick" v-html="qaHtml"></div>
   </details>
 
   <div v-else-if="block.type === 'pitfall'" class="blk-pitfall">

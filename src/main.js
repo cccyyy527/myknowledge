@@ -7,6 +7,7 @@ import TopicPage from './pages/TopicPage.vue'
 import NotePage from './pages/NotePage.vue'
 import AggregatePage from './pages/AggregatePage.vue'
 import SearchPage from './pages/SearchPage.vue'
+import OrphanPage from './pages/OrphanPage.vue'
 import 'katex/dist/katex.min.css'
 import './styles.css'
 
@@ -19,6 +20,7 @@ const router = createRouter({
     { path: '/n/:noteId', component: NotePage },
     { path: '/agg/:kind', component: AggregatePage },
     { path: '/search', component: SearchPage },
+    { path: '/orphans', component: OrphanPage },
   ],
   scrollBehavior: () => ({ top: 0 }),
 })

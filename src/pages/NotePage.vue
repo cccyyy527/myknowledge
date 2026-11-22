@@ -410,7 +410,13 @@ const del = () => {
   if (!confirm('删除这篇笔记？原型阶段无法恢复。')) return
   const t = note.value.topicId
   removeNote(note.value.id)
-  router.push(`/t/${t}`)
+  router.push(t ? `/t/${t}` : '/orphans')
+}
+
+// 问答卡里的 [1] 引用 chip：目标是另一篇还在的笔记才跳
+const openRef = (id) => {
+  if (!id || id === note.value.id || !noteById(id)) return
+  router.push(`/n/${id}`)
 }
 </script>
 
@@ -418,11 +424,14 @@ const del = () => {
   <section v-if="note" class="page note-page">
     <nav class="crumb">
       <RouterLink to="/">知识库</RouterLink> /
-      <RouterLink :to="`/d/${domain.id}`">{{ domain.name }}</RouterLink> /
-      <template v-for="(p, i) in path" :key="p.id">
-        <RouterLink :to="`/t/${p.id}`">{{ p.name }}</RouterLink>
-        <span v-if="i < path.length - 1"> / </span>
+      <template v-if="domain">
+        <RouterLink :to="`/d/${domain.id}`">{{ domain.name }}</RouterLink> /
+        <template v-for="(p, i) in path" :key="p.id">
+          <RouterLink :to="`/t/${p.id}`">{{ p.name }}</RouterLink>
+          <span v-if="i < path.length - 1"> / </span>
+        </template>
       </template>
+      <RouterLink v-else to="/orphans" class="crumb-orphan">失去归属的笔记</RouterLink>
     </nav>
 
     <div class="note-head">
@@ -533,7 +542,7 @@ const del = () => {
         :title="isTouch ? '点右上角 ✎ 改这一块' : '双击改这一块'"
         @dblclick="editAt(b.id)"
       >
-        <BlockView :block="b" />
+        <BlockView :block="b" @open-note="openRef" />
         <button
           v-if="isTouch"
           class="rd-edit"

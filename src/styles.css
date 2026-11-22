@@ -114,6 +114,20 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .side-topic.empty { color: var(--ink-3); }
 .side-note { margin: 18px 8px 0; font-size: 11.5px; line-height: 1.6; color: var(--ink-3); }
 
+/* 域被删后掉出来的笔记：只在真有的时候出现，别常驻占位 */
+.side-orphan {
+  display: flex; align-items: center; gap: 6px; margin: 12px 6px 0; padding: 5px 8px;
+  border: 1px dashed #e6cdb8; border-radius: 6px; background: #fdf8f4;
+  color: #a3552a; font-size: 12px; text-decoration: none;
+}
+.side-orphan:hover { border-color: var(--warn); background: #fbeee6; }
+.side-orphan-mark {
+  flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--warn);
+  color: #fff; font-size: 10px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.side-orphan-n { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+
 .main { flex: 1; min-width: 0; }
 
 /* ---------- page ---------- */
@@ -152,6 +166,25 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .bar i { display: block; height: 100%; background: var(--accent); }
 
 .empty-state { border: 1px dashed var(--line); border-radius: var(--radius); padding: 34px; text-align: center; color: var(--ink-2); font-size: 14px; }
+
+/* ---------- 失去归属的笔记 ---------- */
+.crumb-orphan { color: var(--warn); }
+.orphan-row {
+  display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+}
+.orphan-row + .orphan-row { margin-top: 10px; }
+.orphan-main { flex: 1; min-width: 220px; }
+.orphan-title { font-size: 14px; font-weight: 650; }
+.orphan-title:hover { color: var(--accent); }
+.orphan-sum { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-2); }
+.orphan-where { margin: 4px 0 0; font-size: 11.5px; color: var(--ink-3); font-family: var(--mono); }
+.orphan-tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.orphan-sel { width: auto; max-width: 240px; margin-bottom: 0; }
+@media (max-width: 560px) {
+  .orphan-tools { width: 100%; }
+  .orphan-sel { flex: 1; min-width: 0; max-width: none; }
+}
 
 /* ---------- buttons ---------- */
 .btn, .btn-ghost, .chip-btn {
@@ -239,6 +272,13 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .blk-qa summary::-webkit-details-marker { display: none; }
 .qa-badge { font-size: 10px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 4px; padding: 1px 5px; transform: translateY(-1px); }
 .qa-a { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line); font-size: 13.5px; color: var(--ink-2); white-space: pre-wrap; }
+/* 答案里的 [1] 引用：存块时把出处 id 一起留下来，点一下跳回原笔记 */
+.qa-cite {
+  font-family: var(--mono); font-size: 10.5px; line-height: 1; vertical-align: super;
+  padding: 1px 3px; margin: 0 1px; border: 0; border-radius: 3px;
+  background: var(--accent-soft); color: var(--accent); cursor: pointer;
+}
+.qa-cite:hover { background: var(--accent); color: #fff; }
 
 .blk-pitfall { background: #fdf8f4; border: 1px solid #f0dfd1; border-radius: var(--radius); padding: 11px 14px; font-size: 13.5px; }
 .pit-title { display: inline-block; font-size: 10.5px; font-weight: 700; color: #fff; background: var(--warn); border-radius: 4px; padding: 1px 6px; margin-bottom: 6px; }

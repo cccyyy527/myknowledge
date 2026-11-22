@@ -171,7 +171,11 @@ const savingBlocks = computed(() => {
   const src = t.used.length
     ? '\n\n来源：' + t.used.map((s, i) => `[${i + 1}] ${s.title}`).join('　')
     : ''
-  const out = [{ id: 'pv-qa', type: 'qa', question: t.q, answer: (inside || '（空）') + src }]
+  // refs 让 [n] 在笔记里还能点回原笔记；answer 里的文字留着，导出 / 复制也不丢
+  const refs = t.used.map((s) => ({ id: s.id, title: s.title }))
+  const out = [
+    { id: 'pv-qa', type: 'qa', question: t.q, answer: (inside || '（空）') + src, refs },
+  ]
   if (saving.value.outside && outside) {
     out.push({
       id: 'pv-warn',

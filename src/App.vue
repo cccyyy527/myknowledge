@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   state,
@@ -12,6 +12,7 @@ import {
   renameTopic,
   removeTopic,
   removeDomain,
+  orphanNotes,
   snapshot,
   applyRemote,
 } from './lib/store.js'
@@ -30,6 +31,9 @@ const aiOpen = ref(false)
 const syncTip = ref('')
 const open = reactive({ d4: true })
 const treeOpen = reactive({ 't-variance': true })
+
+// 域被删掉后剩下来的笔记，只在真有的时候露出来
+const orphanCount = computed(() => orphanNotes().length)
 
 let timer = null
 let quietUntil = 0
@@ -104,13 +108,11 @@ const delTopic = (t) => {
 }
 
 const delDomain = (d) => {
-  if (domainStats(d.id).notes) {
-    alert(`「${d.name}」下还有笔记，先把笔记删掉再删域。`)
-    return
-  }
-  if (confirm(`删除知识域「${d.name}」及其全部 ${domainStats(d.id).topics} 个分类？`)) {
-    removeDomain(d.id)
-  }
+  const s = domainStats(d.id)
+  const msg = s.notes
+    ? `删除知识域「${d.name}」及其 ${s.topics} 个分类？\n\n${s.notes} 篇笔记不会消失，会落到「失去归属的笔记」，可以在那里重新指一个分类。`
+    : `删除知识域「${d.name}」及其全部 ${s.topics} 个分类？`
+  if (confirm(msg)) removeDomain(d.id, true)
 }
 </script>
 
@@ -209,6 +211,12 @@ const delDomain = (d) => {
       </div>
 
       <button v-if="editMode" class="side-add dom" @click="createDomain('新域')">＋ 新增知识域</button>
+
+      <RouterLink v-if="orphanCount" to="/orphans" class="side-orphan">
+        <span class="side-orphan-mark">!</span>
+        失去归属的笔记
+        <span class="side-orphan-n">{{ orphanCount }}</span>
+      </RouterLink>
 
       <p class="side-note">
         原型阶段数据存在浏览器 localStorage（键名 <code>myknowledge.v3</code>），刷新不丢。

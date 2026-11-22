@@ -121,6 +121,29 @@ export function notesOfSubtree(topicId) {
 export const notesOfDomain = (domainId) =>
   state.notes.filter((n) => n.domainId === domainId).sort(byPinnedThenUpdated)
 
+// 域没了（别的设备删掉后合并回来、或老数据里 domainId 指向不存在的域），
+// 笔记会落到 notes/_orphan.json。文件有兜底，界面也得看得见，否则就是黑洞。
+export function orphanNotes() {
+  const ids = new Set(state.domains.map((d) => d.id))
+  return state.notes
+    .filter((n) => {
+      const domainId = n.domainId || topicById(n.topicId)?.domainId || ''
+      return !ids.has(domainId)
+    })
+    .sort(byPinnedThenUpdated)
+}
+
+// 把失去归属的笔记重新挂到某个分类下
+export function adoptNote(noteId, topicId) {
+  const n = noteById(noteId)
+  const t = topicById(topicId)
+  if (!n || !t) return false
+  n.domainId = t.domainId
+  n.topicId = t.id
+  touchNote(n)
+  return true
+}
+
 // 云端不存 updatedAt，拉回本机时才会补上；万一还是缺，就退回 createdAt
 const stampOf = (n) => new Date(n.updatedAt || n.createdAt || 0).getTime() || 0
 
@@ -236,9 +259,19 @@ export function removeTopic(topicId) {
   return moved
 }
 
-export function removeDomain(domainId) {
-  if (notesOfDomain(domainId).length) return false
+export function removeDomain(domainId, force = false) {
+  if (!force && notesOfDomain(domainId).length) return false
   const ids = new Set(state.topics.filter((t) => t.domainId === domainId).map((t) => t.id))
+  if (force) {
+    // 域连同笔记一起删：笔记不能凭空消失，脱掉归属落进 notes/_orphan.json，
+    // 用户可以在「失去归属的笔记」里重新指一个分类，或者直接删掉
+    for (const n of state.notes) {
+      if (n.domainId === domainId || ids.has(n.topicId)) {
+        n.domainId = ''
+        n.topicId = ''
+      }
+    }
+  }
   state.topics = state.topics.filter((t) => !ids.has(t.id))
   state.domains = state.domains.filter((d) => d.id !== domainId)
   return true

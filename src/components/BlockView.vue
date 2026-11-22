@@ -1,8 +1,19 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import katex from 'katex'
 
-const props = defineProps({ block: { type: Object, required: true } })
+const props = defineProps({
+  block: { type: Object, required: true },
+  expand: { type: Boolean, default: false },
+})
+
+const failed = ref(false)
+watch(
+  () => props.block.src,
+  () => {
+    failed.value = false
+  },
+)
 
 const html = computed(() => {
   if (props.block.type !== 'formula') return ''
@@ -33,6 +44,22 @@ const html = computed(() => {
     <figcaption v-if="block.text">{{ block.text }}</figcaption>
   </figure>
 
+  <figure v-else-if="block.type === 'image'" class="blk-img">
+    <img
+      v-if="block.src && !failed"
+      :src="block.src"
+      :alt="block.text || '图片'"
+      loading="lazy"
+      referrerpolicy="no-referrer"
+      @error="failed = true"
+    />
+    <div v-else class="img-bad">
+      <span>{{ block.src ? '图没加载出来，链接可能失效或不许外链' : '还没填图片链接' }}</span>
+      <a v-if="block.src" :href="block.src" target="_blank" rel="noreferrer">打开原图</a>
+    </div>
+    <figcaption v-if="block.text">{{ block.text }}</figcaption>
+  </figure>
+
   <div v-else-if="block.type === 'definition'" class="blk-def">
     <div class="def-term">{{ block.term || '术语' }}</div>
     <div class="def-text">{{ block.text }}</div>
@@ -59,7 +86,7 @@ const html = computed(() => {
     </div>
   </div>
 
-  <details v-else-if="block.type === 'qa'" class="blk-qa">
+  <details v-else-if="block.type === 'qa'" class="blk-qa" :open="expand">
     <summary><span class="qa-badge">Q</span>{{ block.question || '（未填问题）' }}</summary>
     <div class="qa-a">{{ block.answer }}</div>
   </details>

@@ -7,6 +7,7 @@ const BUDGET = 18000 // 资料总字符上限，约 9k token
 
 export function blockText(b) {
   if (!b) return ''
+  if (b.type === 'image') return b.text || ''
   if (b.type === 'qa') return [b.question, b.answer].filter(Boolean).join(' ')
   if (b.type === 'pitfall') return [b.text, b.cause, b.avoid].filter(Boolean).join(' ')
   if (b.type === 'comparison')
@@ -42,7 +43,7 @@ function hits(hay, term, cap = 5) {
   return n
 }
 
-function scoreNote(note, toks, phrase) {
+function scoreNote(note, toks, phrase, softToks = []) {
   const title = titleOf(note)
   const path = pathOf(note)
   const body = bodyOf(note)
@@ -51,6 +52,12 @@ function scoreNote(note, toks, phrase) {
     if (title.includes(t)) score += 6
     if (path.includes(t)) score += 3
     score += hits(body, t)
+  }
+  // 追问带上的上一轮问题只算半票：别让「上轮聊过的话题」盖过「这一句真正问的」
+  for (const t of softToks) {
+    if (title.includes(t)) score += 3
+    if (path.includes(t)) score += 1.5
+    score += hits(body, t) * 0.5
   }
   if (phrase) {
     if (title.includes(phrase)) score += 12
@@ -80,11 +87,14 @@ function noteDigest(note, idx) {
 const byUpdated = (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
 
 // 命中的笔记 + 分数，给 UI 里「翻了哪几篇」用
-export function searchLibrary(question, { limit = MAX_NOTES } = {}) {
+// extra：追问时把上一轮的问题也拿来找，只算半票
+export function searchLibrary(question, { limit = MAX_NOTES, extra = '' } = {}) {
   const phrase = String(question || '').trim().toLowerCase()
   const toks = tokenize(question)
+  const seen = new Set(toks)
+  const softToks = tokenize(extra).filter((t) => !seen.has(t))
   const ranked = state.notes
-    .map((note) => ({ note, score: scoreNote(note, toks, phrase) }))
+    .map((note) => ({ note, score: scoreNote(note, toks, phrase, softToks) }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
   if (!ranked.length) return []
@@ -95,11 +105,11 @@ export function searchLibrary(question, { limit = MAX_NOTES } = {}) {
 }
 
 // 组资料：优先命中，一篇都没命中就退回最近改的几篇，避免模型完全瞎猜
-export function buildContext(question, { budget = BUDGET } = {}) {
+export function buildContext(question, { budget = BUDGET, extra = '' } = {}) {
   const notes = state.notes.filter((n) => (n.blocks || []).length)
   if (!notes.length) return { empty: true, text: '', used: [] }
 
-  let picked = searchLibrary(question)
+  let picked = searchLibrary(question, { extra })
   const fallback = picked.length === 0
   if (fallback) {
     picked = notes

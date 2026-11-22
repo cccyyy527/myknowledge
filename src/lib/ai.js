@@ -440,7 +440,10 @@ export async function askLibrary({
   onDelta,
   signal,
 } = {}) {
-  const { empty, text: ctx, used, fallback } = buildContext(question)
+  // 追问「那它的假设是什么」里没有关键词，只按这一句检索会漏到别的笔记上；
+  // 把上一轮的问题也带上（只算半票），当前这句仍然是主角
+  const prevQ = [...history].reverse().find((m) => m.role === 'user')?.content || ''
+  const { empty, text: ctx, used, fallback } = buildContext(question, { extra: prevQ })
   if (empty) throw new Error('库里还没有笔记，先写一篇再来问')
 
   const head = fallback

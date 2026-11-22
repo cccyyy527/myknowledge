@@ -3,6 +3,8 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { loadAI, isAiReady, askLibrary, OUTSIDE_MARK } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
+import { state, createNote, newBlockId, flattenTopics, topicPath } from '../lib/store.js'
+import BlockView from './BlockView.vue'
 
 const emit = defineEmits(['close', 'setup'])
 const router = useRouter()
@@ -95,6 +97,7 @@ const stop = () => ctrl && ctrl.abort()
 const reset = () => {
   if (busy.value) return
   turns.value = []
+  saving.value = null
 }
 
 const jump = (id) => {
@@ -131,6 +134,68 @@ const splitOutside = (text) => {
   if (i < 0) return { inside: s, outside: '' }
   return { inside: s.slice(0, i).trim(), outside: s.slice(i + OUTSIDE_MARK.length).trim() }
 }
+
+/* ---------- 把一条回答存成笔记 ---------- */
+
+const saving = ref(null) // { idx, topicId, outside }
+
+const groups = computed(() =>
+  state.domains.map((d) => ({ domain: d, rows: flattenTopics(d.id, true) })),
+)
+
+const savingTurn = computed(() => (saving.value ? turns.value[saving.value.idx] : null))
+
+// 预览用的块：问答卡留住问题和答法，[n] 的出处附在后面才查得到
+const savingBlocks = computed(() => {
+  const t = savingTurn.value
+  if (!t || !saving.value) return []
+  const { inside, outside } = splitOutside(t.a)
+  const src = t.used.length
+    ? '\n\n来源：' + t.used.map((s, i) => `[${i + 1}] ${s.title}`).join('　')
+    : ''
+  const out = [{ id: 'pv-qa', type: 'qa', question: t.q, answer: (inside || '（空）') + src }]
+  if (saving.value.outside && outside) {
+    out.push({
+      id: 'pv-warn',
+      type: 'callout',
+      tone: 'warn',
+      text: '下面这段是 AI 的外部知识，不是你笔记里的内容，存进来后自己核一遍再当结论用。',
+    })
+    let i = 0
+    for (const para of outside.split(/\n{2,}/)) {
+      const text = para.trim()
+      if (text) out.push({ id: `pv-p${i++}`, type: 'paragraph', text })
+    }
+  }
+  return out
+})
+
+const openSave = (idx) => {
+  const t = turns.value[idx]
+  const srcNote = t.used[0] && state.notes.find((n) => n.id === t.used[0].id)
+  const anyTopic = flattenTopics(state.domains[0]?.id, true)[0]?.topic?.id || ''
+  saving.value = {
+    idx,
+    topicId: srcNote?.topicId || anyTopic,
+    outside: false,
+  }
+}
+
+const doSave = () => {
+  const t = savingTurn.value
+  if (!t || !saving.value?.topicId) return
+  const note = createNote(saving.value.topicId)
+  note.title = t.q.length > 38 ? t.q.slice(0, 38) + '…' : t.q
+  note.blocks = savingBlocks.value.map((b) => {
+    const { id, ...rest } = b
+    return { id: newBlockId(), ...rest }
+  })
+  saving.value = null
+  emit('close')
+  router.push(`/n/${note.id}`)
+}
+
+const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
 </script>
 
 <template>
@@ -171,6 +236,40 @@ const splitOutside = (text) => {
                 <span class="ask-chip-n">{{ k + 1 }}</span>{{ s.title }}
               </button>
             </div>
+            <template v-if="!t.streaming">
+              <button v-if="!saving || saving.idx !== i" class="ask-save" @click="openSave(i)">
+                ＋ 存成笔记
+              </button>
+
+              <div v-else class="ask-save-box">
+                <div class="ask-save-head">
+                  <span>存成新笔记</span>
+                  <button class="ask-save-x" title="取消" @click="saving = null">×</button>
+                </div>
+                <label class="ai-pick">
+                  <span>落到</span>
+                  <select v-model="saving.topicId">
+                    <optgroup v-for="g in groups" :key="g.domain.id" :label="g.domain.name">
+                      <option v-for="r in g.rows" :key="r.topic.id" :value="r.topic.id">
+                        {{ '　'.repeat(r.depth) }}{{ r.topic.name }}
+                      </option>
+                    </optgroup>
+                  </select>
+                </label>
+                <p class="ask-save-path">{{ pathOf(saving.topicId) }}</p>
+                <label v-if="splitOutside(t.a).outside" class="ask-save-out">
+                  <input type="checkbox" v-model="saving.outside" />
+                  <span>也带上「库外」那段（AI 外推的，会标成待核对）</span>
+                </label>
+                <div class="ai-preview ask-save-pv">
+                  <BlockView v-for="b in savingBlocks" :key="b.id" :block="b" expand />
+                </div>
+                <div class="ai-acts">
+                  <button class="ai-primary" @click="doSave">写入新笔记</button>
+                  <button @click="saving = null">取消</button>
+                </div>
+              </div>
+            </template>
           </template>
         </div>
       </div>

@@ -31,6 +31,7 @@ const LABELS = {
   todo: '待补',
   code: '代码',
   bulletList: '列表',
+  image: '图片',
 }
 </script>
 
@@ -114,6 +115,16 @@ const LABELS = {
 
     <template v-else-if="block.type === 'todo'">
       <input v-model="block.text" class="inp" placeholder="待补什么" />
+    </template>
+
+    <template v-else-if="block.type === 'image'">
+      <input v-model.trim="block.src" class="inp inp-mono" placeholder="图片链接 https://…" />
+      <input v-model="block.text" class="inp" placeholder="图注（可选，能参与搜索）" />
+      <div v-if="block.src" class="ed-preview ed-img-preview">
+        <img :src="block.src" alt="" loading="lazy" referrerpolicy="no-referrer" />
+      </div>
+      <p class="ed-hint">本地截图没法直接传：先拖进 GitHub 任意一个 issue 的输入框，它会生成一串
+        <code>user-attachments</code> 链接，复制粘到这里。那链接永久有效，也不用 token。</p>
     </template>
 
     <template v-else-if="block.type === 'code'">

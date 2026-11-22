@@ -92,6 +92,7 @@ const ADD = [
   ['bulletList', '列表', { items: [''] }],
   ['paragraph', '段落', { text: '' }],
   ['code', '代码', { text: '' }],
+  ['image', '图片', { src: '', text: '' }],
   ['todo', '待补', { text: '' }],
 ]
 

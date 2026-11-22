@@ -40,9 +40,21 @@ npm run dev      # http://localhost:5174
 
 ## 部署
 
-推 `main` 触发 `.github/workflows/deploy.yml`，构建并发布到
-`https://cccyyy527.github.io/myknowledge/`。注意 GitHub Pages 在 **Free 账号下只支持公开仓库**，
-所以本仓库需要设为 public，笔记内容不在这里（在私有数据仓库或本机浏览器）。
+推 `main` 触发 `.github/workflows/deploy.yml`：构建后把 `dist/` 强制推到 `gh-pages` 分支
+（用 `peaceiris/actions-gh-pages@v4`，不需要 Pages API 权限）。
+
+首次启用只需一次（GitHub 现在不给 `GITHUB_TOKEN` 建站点的权限，必须手动点）：
+
+1. 仓库 **Settings → Pages**
+2. **Source** 选 `Deploy from a branch`
+3. **Branch** 选 `gh-pages`，目录选 `/ (root)`，Save
+4. 等 1 分钟，访问 `https://cccyyy527.github.io/myknowledge/`
+
+注意：
+
+- Free 账号下 Pages **只支持公开仓库**，所以本仓库是 public；笔记正文不在这个仓库里
+- 站点是公开可访问的静态页面，但**数据要靠浏览器里的 token 才能拉取**，别人打开只会看到空库
+- 之后每次推 `main`，`gh-pages` 会被覆盖更新，Pages 自动重新发布
 
 ## 结构
 

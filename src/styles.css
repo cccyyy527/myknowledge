@@ -292,8 +292,31 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .ed-section-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-top: 4px; }
 .ed-section-add .muted { font-size: 11.5px; }
 
-.rd-block { border-radius: 6px; transition: background 0.12s; }
+.rd-block { position: relative; border-radius: 6px; transition: background 0.12s; }
 .rd-block:hover { background: #fbfaf8; box-shadow: 0 0 0 6px #fbfaf8; }
+.rd-block.is-touch { padding-right: 30px; }
+.rd-block.is-touch:hover { background: none; box-shadow: none; }
+.rd-edit {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-3);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  opacity: 0.7;
+  z-index: 1;
+  -webkit-tap-highlight-color: transparent;
+}
+.rd-edit:active { opacity: 1; color: var(--ink); border-color: #cfcdc7; background: #f6f4ef; }
 .dbl-tip { flex: 1 1 100%; font-size: 11.5px; color: var(--ink-3); margin: 6px 0 0; }
 
 /* ---------- aggregate ---------- */

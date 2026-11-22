@@ -130,10 +130,19 @@ const moveBlock = (i, delta) => {
 const removeBlock = (i) => note.value.blocks.splice(i, 1)
 
 /* ---------- 小节：增 / 删 / 整节上下移 ---------- */
+// 触屏没有双击：给每块挂一个点得到的 ✎
+const isTouch = ref(false)
+let touchMq = null
+const syncTouch = () => {
+  isTouch.value = touchMq ? touchMq.matches : false
+}
+
 const focusBlock = (id) => {
   const row = document.querySelector(`.ed-row[data-bid="${id}"]`)
   const inp = row && row.querySelector('input, textarea, select')
   if (!inp) return
+  // 手机上键盘会盖住下半屏，先把块滚到中间再聚焦
+  if (isTouch.value) inp.scrollIntoView({ block: 'center' })
   inp.focus()
   if (inp.value && typeof inp.setSelectionRange === 'function') {
     inp.setSelectionRange(inp.value.length, inp.value.length)
@@ -246,8 +255,16 @@ const onPaste = (e) => {
   openOcr(null, f)
 }
 
-onMounted(() => window.addEventListener('paste', onPaste))
-onBeforeUnmount(() => window.removeEventListener('paste', onPaste))
+onMounted(() => {
+  window.addEventListener('paste', onPaste)
+  touchMq = window.matchMedia('(hover: none), (pointer: coarse)')
+  syncTouch()
+  touchMq.addEventListener?.('change', syncTouch)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('paste', onPaste)
+  touchMq?.removeEventListener?.('change', syncTouch)
+})
 
 const applyAi = ({ action, blocks }) => {
   if (!aiTarget.value) return
@@ -293,7 +310,9 @@ const del = () => {
         </button>
         <button class="btn-ghost danger" @click="del">删除</button>
       </div>
-      <p v-if="mode !== 'edit'" class="dbl-tip">双击正文里任意一块，直接改那一块</p>
+      <p v-if="mode !== 'edit'" class="dbl-tip">
+        {{ isTouch ? '点每块右上角的 ✎ 就能改那一块' : '双击正文里任意一块，直接改那一块' }}
+      </p>
     </div>
 
     <p class="note-meta">
@@ -372,10 +391,19 @@ const del = () => {
         v-for="b in visibleBlocks"
         :key="b.id"
         class="rd-block"
-        title="双击改这一块"
+        :class="{ 'is-touch': isTouch }"
+        :title="isTouch ? '点右上角 ✎ 改这一块' : '双击改这一块'"
         @dblclick="editAt(b.id)"
       >
         <BlockView :block="b" />
+        <button
+          v-if="isTouch"
+          class="rd-edit"
+          title="改这一块"
+          @click.stop="editAt(b.id)"
+        >
+          ✎
+        </button>
       </div>
       <p v-if="mode === 'quick' && visibleBlocks.length <= 1" class="muted">
         这篇还没有概念 / 公式 / 问答 / 坑卡片。

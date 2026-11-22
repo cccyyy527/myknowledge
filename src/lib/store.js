@@ -102,6 +102,7 @@ export function createNote(topicId) {
     topicId: topic.id,
     title: '未命名笔记',
     pinned: false,
+    tags: [],
     version: 1,
     createdAt: now,
     updatedAt: now,

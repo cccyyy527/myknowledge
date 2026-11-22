@@ -2,7 +2,11 @@
 import { computed } from 'vue'
 import katex from 'katex'
 
-const props = defineProps({ block: { type: Object, required: true }, index: { type: Number, default: 0 } })
+const props = defineProps({
+  block: { type: Object, required: true },
+  index: { type: Number, default: 0 },
+  deletable: { type: Boolean, default: true },
+})
 const emit = defineEmits(['remove', 'move'])
 
 const preview = computed(() => {
@@ -37,7 +41,7 @@ const LABELS = {
       <span class="ed-actions">
         <button title="上移" @click="emit('move', -1)">↑</button>
         <button title="下移" @click="emit('move', 1)">↓</button>
-        <button title="删除" @click="emit('remove')">×</button>
+        <button v-if="deletable" title="删除" @click="emit('remove')">×</button>
       </span>
     </div>
 

@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   topicById,
@@ -14,7 +14,17 @@ const route = useRoute()
 const router = useRouter()
 const topic = computed(() => topicById(route.params.topicId))
 const domain = computed(() => (topic.value ? domainById(topic.value.domainId) : null))
-const notes = computed(() => (topic.value ? notesOfTopic(topic.value.id) : []))
+const all = computed(() => (topic.value ? notesOfTopic(topic.value.id) : []))
+
+const activeTag = ref('')
+const tags = computed(() => {
+  const set = new Set()
+  all.value.forEach((n) => (n.tags || []).forEach((t) => set.add(t)))
+  return [...set]
+})
+const notes = computed(() =>
+  activeTag.value ? all.value.filter((n) => (n.tags || []).includes(activeTag.value)) : all.value,
+)
 
 const add = () => {
   const n = createNote(route.params.topicId)
@@ -39,6 +49,24 @@ const ago = (iso) => {
       <h1 class="page-title">{{ topic.name }}</h1>
       <button class="btn" @click="add">+ 新建笔记</button>
     </div>
+    <p class="muted topic-hint">
+      一篇笔记 = 一个知识点（如 CUPED / 分层抽样 / 回归调整）。同主题内容再多，也不开子目录，用标签切片。
+    </p>
+
+    <div v-if="tags.length" class="tag-bar">
+      <button class="chip-btn" :class="{ on: !activeTag }" @click="activeTag = ''">
+        全部 {{ all.length }}
+      </button>
+      <button
+        v-for="t in tags"
+        :key="t"
+        class="chip-btn"
+        :class="{ on: activeTag === t }"
+        @click="activeTag = activeTag === t ? '' : t"
+      >
+        # {{ t }}
+      </button>
+    </div>
 
     <div v-if="!notes.length" class="empty-state">
       <p>这个子分类还没有笔记。</p>
@@ -49,6 +77,9 @@ const ago = (iso) => {
       <RouterLink v-for="n in notes" :key="n.id" :to="`/n/${n.id}`" class="card note-card">
         <h3>{{ n.title }}<span v-if="n.pinned" class="pin">置顶</span></h3>
         <p class="card-hint">{{ noteSummary(n) }}</p>
+        <div v-if="(n.tags || []).length" class="card-tags">
+          <span v-for="t in n.tags" :key="t" class="tag">#{{ t }}</span>
+        </div>
         <div class="card-meta">
           <span v-if="noteBadges(n).formulas">公式 {{ noteBadges(n).formulas }}</span>
           <span v-if="noteBadges(n).qa">问答 {{ noteBadges(n).qa }}</span>

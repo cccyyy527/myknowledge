@@ -83,6 +83,7 @@ export const DEMO_NOTE = {
   topicId: 't-variance',
   title: 'CUPED 方差缩减',
   pinned: true,
+  tags: ['CUPED', '协变量调整'],
   version: 3,
   createdAt: '2026-11-22T10:00:00.000Z',
   updatedAt: '2026-11-22T12:40:00.000Z',

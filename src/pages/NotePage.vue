@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  state,
   noteById,
   topicById,
   domainById,
@@ -27,7 +26,7 @@ const savedAt = ref('')
 const saving = ref(false)
 let timer = null
 watch(
-  () => (note.value ? [note.value.title, JSON.stringify(note.value.blocks)] : []),
+  () => (note.value ? [note.value.title, note.value.tags, JSON.stringify(note.value.blocks)] : []),
   () => {
     if (!note.value) return
     saving.value = true
@@ -40,6 +39,13 @@ watch(
   },
 )
 
+const setTags = (v) => {
+  note.value.tags = v
+    .split(/[,，\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 const QUICK_TYPES = ['definition', 'formula', 'qa', 'pitfall', 'todo']
 const visibleBlocks = computed(() => {
   if (!note.value) return []
@@ -47,32 +53,53 @@ const visibleBlocks = computed(() => {
   return note.value.blocks.filter((b) => QUICK_TYPES.includes(b.type) || b.type === 'heading')
 })
 
+// 四段骨架固定；其余块按 heading 归入所在分区，新块只会落到“想放的那一段”
+const sections = computed(() => {
+  const out = []
+  let cur = { heading: null, items: [] }
+  const blocks = note.value ? note.value.blocks : []
+  blocks.forEach((b, i) => {
+    if (b.type === 'heading' && b.level === 2) {
+      if (cur.heading || cur.items.length) out.push(cur)
+      cur = { heading: { block: b, index: i }, items: [] }
+    } else {
+      cur.items.push({ block: b, index: i })
+    }
+  })
+  if (cur.heading || cur.items.length) out.push(cur)
+  return out
+})
+
 const ADD = [
-  ['definition', '概念卡', { term: '', text: '', detail: '' }],
-  ['formula', '公式卡', { latex: '', text: '' }],
-  ['comparison', '对比卡', { left: '方案 A', right: '方案 B', rows: [{ k: '', a: '', b: '' }] }],
-  ['qa', '问答卡', { question: '', answer: '' }],
-  ['pitfall', '坑卡', { text: '', cause: '', avoid: '' }],
-  ['steps', '步骤卡', { text: '', items: [''] }],
+  ['definition', '概念', { term: '', text: '', detail: '' }],
+  ['formula', '公式', { latex: '', text: '' }],
+  ['comparison', '对比', { left: '方案 A', right: '方案 B', rows: [{ k: '', a: '', b: '' }] }],
+  ['qa', '问答', { question: '', answer: '' }],
+  ['pitfall', '坑', { text: '', cause: '', avoid: '' }],
+  ['steps', '步骤', { text: '', items: [''] }],
   ['callout', '提示', { tone: 'tip', text: '' }],
   ['bulletList', '列表', { items: [''] }],
-  ['heading', '小节标题', { level: 2, text: '' }],
   ['paragraph', '段落', { text: '' }],
   ['code', '代码', { text: '' }],
   ['todo', '待补', { text: '' }],
 ]
 
-const addBlock = (type) => {
+const addBlock = (type, section) => {
   const def = ADD.find((a) => a[0] === type)
   if (!def || !note.value) return
-  note.value.blocks.push({ id: newBlockId(), type, ...structuredClone(def[2]) })
-  mode.value = 'edit'
+  const blocks = note.value.blocks
+  let at
+  if (!section.heading) at = 0
+  else if (section.items.length) at = section.items[section.items.length - 1].index + 1
+  else at = section.heading.index + 1
+  blocks.splice(at, 0, { id: newBlockId(), type, ...structuredClone(def[2]) })
 }
 
 const moveBlock = (i, delta) => {
   const arr = note.value.blocks
   const j = i + delta
   if (j < 0 || j >= arr.length) return
+  if (arr[j].type === 'heading') return
   ;[arr[i], arr[j]] = [arr[j], arr[i]]
 }
 
@@ -116,30 +143,52 @@ const del = () => {
       <span v-if="noteBadges(note).todos" class="chip warn">待补 {{ noteBadges(note).todos }}</span>
     </p>
 
-    <article class="blocks">
-      <template v-if="mode === 'edit'">
-        <BlockEdit
-          v-for="(b, i) in note.blocks"
-          :key="b.id"
-          :block="b"
-          :index="i"
-          @remove="removeBlock(i)"
-          @move="(d) => moveBlock(i, d)"
-        />
-        <div class="adder">
-          <span class="adder-label">插入块</span>
-          <button v-for="a in ADD" :key="a[0]" class="chip-btn" @click="addBlock(a[0])">
-            + {{ a[1] }}
-          </button>
-        </div>
-      </template>
+    <div v-if="mode === 'edit'" class="tag-row">
+      <span class="adder-label">标签</span>
+      <input
+        class="inp inp-mini"
+        :value="(note.tags || []).join(', ')"
+        placeholder="CUPED, 协变量调整"
+        @change="setTags($event.target.value)"
+      />
+      <span class="muted">同子分类内用标签切片，不必再加一层目录</span>
+    </div>
 
-      <template v-else>
-        <BlockView v-for="b in visibleBlocks" :key="b.id" :block="b" />
-        <p v-if="mode === 'quick' && visibleBlocks.length <= 1" class="muted">
-          这篇还没有概念 / 公式 / 问答 / 坑卡片。
-        </p>
-      </template>
+    <template v-if="mode === 'edit'">
+      <p class="ed-tip">
+        四段骨架不可改。新知识按<strong>形态</strong>加进对应分区：术语→概念、算式→公式、两者之差→对比、
+        面试官会问的→问答、自己错过的→坑。分区末尾的 + 决定它落在哪一段。
+      </p>
+      <div class="blocks">
+        <section v-for="(sec, si) in sections" :key="si" class="ed-section">
+          <BlockEdit
+            v-if="sec.heading"
+            :block="sec.heading.block"
+            :deletable="false"
+            @move="(d) => moveBlock(sec.heading.index, d)"
+          />
+          <BlockEdit
+            v-for="it in sec.items"
+            :key="it.block.id"
+            :block="it.block"
+            @remove="removeBlock(it.index)"
+            @move="(d) => moveBlock(it.index, d)"
+          />
+          <div class="adder">
+            <span class="adder-label">在此段加</span>
+            <button v-for="a in ADD" :key="a[0]" class="chip-btn" @click="addBlock(a[0], sec)">
+              + {{ a[1] }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </template>
+
+    <article v-else class="blocks">
+      <BlockView v-for="b in visibleBlocks" :key="b.id" :block="b" />
+      <p v-if="mode === 'quick' && visibleBlocks.length <= 1" class="muted">
+        这篇还没有概念 / 公式 / 问答 / 坑卡片。
+      </p>
     </article>
   </section>
   <p v-else class="page">找不到这篇笔记</p>

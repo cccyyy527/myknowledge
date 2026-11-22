@@ -408,17 +408,38 @@ export async function ping(cfg) {
 
 /* ---------- L3：问整个知识库 ---------- */
 
+// 回答里用这一行切开「引你自己的笔记」和「模型自己的知识」
+export const OUTSIDE_MARK = '【库外】'
+
 const ASK_SYSTEM = `你是这个私人知识库的问答助手。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记。
 
 规则：
-- 只依据「资料」回答。资料里没写的，直接说「库里还没有」，再补一句最接近的是哪一篇、还缺什么。
+- 先依据「资料」回答。来自资料的每条具体结论后面标来源，写成 [1]、[2]，编号必须是资料里出现过的编号。
+- 资料里没有、但你确实知道的内容，另起一段，以「${OUTSIDE_MARK}」开头，让用户一眼看出那不是他自己的笔记。没有这类内容就不要写这一段。
+- 资料里没有、你也拿不准的，直接说「库里还没有」，再补一句最接近的是哪一篇、还缺什么。
 - 不要编造数字、论文名、公司案例。用户笔记里没有的具体数字不要补。
-- 每条具体结论后面标来源，写成 [1]、[2]，编号必须是资料里出现过的编号。纯常识的过渡句可以不标。
 - 中文，先给结论再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。
 - 用户问「有哪些 / 列一下」时，把资料里相关的都列出来，一条一行，每条都带来源。
 - 用户的笔记互相矛盾时，指出来是哪两篇、分别怎么写的，不要替他和稀泥。`
 
-export async function askLibrary({ question, history = [], cfg, onDelta, signal } = {}) {
+// 只查笔记模式：一个字都不许超出资料，面试前怕被带偏时用
+const ASK_STRICT = `你是这个私人知识库的问答助手。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记。
+
+规则：
+- 只能依据「资料」回答。每条具体结论后面标来源，写成 [1]、[2]，编号必须是资料里出现过的编号。
+- 资料里没写的，直接说「库里还没有」，再说最接近的是哪一篇、还缺什么，然后就停。
+- 禁止用你自己的通用知识补充，禁止写「${OUTSIDE_MARK}」段落，禁止编造数字、论文名、公司案例。
+- 中文，先给结论再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。
+- 用户问「有哪些 / 列一下」时，把资料里相关的都列出来，一条一行，每条都带来源。`
+
+export async function askLibrary({
+  question,
+  history = [],
+  cfg,
+  strict = false,
+  onDelta,
+  signal,
+} = {}) {
   const { empty, text: ctx, used, fallback } = buildContext(question)
   if (empty) throw new Error('库里还没有笔记，先写一篇再来问')
 
@@ -426,17 +447,17 @@ export async function askLibrary({ question, history = [], cfg, onDelta, signal 
     ? `资料（没有明显命中，下面是最近改过的几篇；如果都不相关就直说库里没有）：`
     : `资料（从用户知识库里检索出来的 ${used.length} 篇）：`
   const messages = [
-    { role: 'system', content: `${ASK_SYSTEM}\n\n${head}\n${ctx}` },
+    { role: 'system', content: `${strict ? ASK_STRICT : ASK_SYSTEM}\n\n${head}\n${ctx}` },
     ...history.slice(-6),
     { role: 'user', content: question },
   ]
 
   const text = await chatStream(messages, {
     cfg,
-    temperature: 0.2,
+    temperature: strict ? 0.1 : 0.2,
     maxTokens: 1600,
     onDelta,
     signal,
   })
-  return { text, used, fallback }
+  return { text, used, fallback, strict }
 }

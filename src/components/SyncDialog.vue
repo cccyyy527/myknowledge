@@ -1,7 +1,9 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { state, snapshot, applyRemote } from '../lib/store.js'
-import { loadRemote, saveRemote, clearRemote, isConfigured, pull, push } from '../lib/remote.js'
+import { loadRemote, saveRemote, clearRemote, isConfigured } from '../lib/remote.js'
+import { pullAll, pushDirty, resetMeta } from '../lib/sync.js'
+import { notesDirOf } from '../lib/split.js'
 
 const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close', 'synced'])
@@ -48,32 +50,33 @@ const withBusy = async (label, fn) => {
 const doPull = () =>
   withBusy('pull', async () => {
     if (!isConfigured(cfg.value)) return say('先填 owner / repo / token', true)
-    const r = await pull(cfg.value)
+    const r = await pullAll(cfg.value, snapshot(), { ignoreLocal: true })
     if (!r) return say('云端还没有 kb.json，点「上传」建立第一份')
-    applyRemote(r.data)
+    applyRemote(r.snapshot)
     emit('synced')
-    const t = r.data.updatedAt ? new Date(r.data.updatedAt).toLocaleString() : '未知时间'
+    const t = r.snapshot.updatedAt ? new Date(r.snapshot.updatedAt).toLocaleString() : '未知时间'
     say(`已用云端数据覆盖本地（云端修改于 ${t}）`)
   })
 
 const doPush = () =>
   withBusy('push', async () => {
     if (!isConfigured(cfg.value)) return say('先填 owner / repo / token', true)
-    const list = await pull(cfg.value).catch(() => null)
-    await push(cfg.value, snapshot(), list?.sha)
+    const r = await pushDirty(cfg.value, snapshot(), { force: true })
     emit('synced')
-    say('本地数据已上传到云端')
+    say(`已上传 ${r.pushed.length} 个文件：${r.pushed.join('、')}`)
   })
 
 const doForget = () => {
   if (!confirm('断开后不再自动上传，本机已填的 token 会被清除。继续？')) return
   clearRemote()
+  resetMeta()
   cfg.value = loadRemote()
   emit('synced')
   say('已断开云端同步，数据仍在本地')
 }
 
 const noteCount = () => state.notes.length
+const notesDir = computed(() => `${notesDirOf(cfg.value) || 'notes'}/`)
 </script>
 
 <template>
@@ -102,13 +105,18 @@ const noteCount = () => state.notes.length
         <input v-model.trim="cfg.branch" placeholder="main" />
       </label>
       <label class="sync-row">
-        <span>文件路径</span>
+        <span>索引文件</span>
         <input v-model.trim="cfg.path" placeholder="kb.json" />
       </label>
       <label class="sync-row">
         <span>Token</span>
         <input v-model.trim="cfg.token" type="password" placeholder="github_pat_..." />
       </label>
+
+      <p class="sync-hint">
+        索引文件只放分类树；笔记按域拆到 <b>{{ notesDir }}</b> 下（如 <b>d4.json</b>），
+        改一篇笔记只写它所在域的那一个文件。
+      </p>
 
       <p class="sync-hint">
         去 GitHub → Settings → Developer settings → Personal access tokens → Fine-grained

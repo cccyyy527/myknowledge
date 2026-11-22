@@ -14,9 +14,9 @@ import {
   removeDomain,
   snapshot,
   applyRemote,
-  lastUpdated,
 } from './lib/store.js'
-import { loadRemote, isConfigured, pull, push } from './lib/remote.js'
+import { loadRemote, isConfigured } from './lib/remote.js'
+import { pullAll, pushDirty } from './lib/sync.js'
 import SyncDialog from './components/SyncDialog.vue'
 import AiPanel from './components/AiPanel.vue'
 
@@ -34,18 +34,16 @@ const treeOpen = reactive({ 't-variance': true })
 let timer = null
 let quietUntil = 0
 
-// 启动时：云端更新过就覆盖本地
+// 启动时：把云端按域拆开的文件合并回来，只重下载变了的部分
 const pullQuiet = async () => {
   const cfg = loadRemote()
   if (!isConfigured(cfg)) return
   try {
-    const r = await pull(cfg)
-    if (!r || !r.data) return
-    if ((r.data.updatedAt || 0) > lastUpdated()) {
-      quietUntil = Date.now() + 800
-      applyRemote(r.data)
-      syncTip.value = '已拉取云端'
-    }
+    const r = await pullAll(cfg, snapshot())
+    if (!r) return
+    quietUntil = Date.now() + 800
+    if (r.changed && r.snapshot) applyRemote(r.snapshot)
+    syncTip.value = r.legacy ? '已按域拆分云端的 kb.json' : '已拉取云端'
   } catch (e) {
     syncTip.value = '拉取失败，检查同步配置'
   }
@@ -53,7 +51,7 @@ const pullQuiet = async () => {
 
 onMounted(pullQuiet)
 
-// 每次改动防抖上传
+// 每次改动防抖上传，只写内容真的变了的域文件
 watch(
   state,
   () => {
@@ -63,9 +61,9 @@ watch(
     clearTimeout(timer)
     timer = setTimeout(async () => {
       try {
-        const r = await pull(cfg)
-        await push(cfg, snapshot(), r?.sha)
-        syncTip.value = '已上传'
+        const r = await pushDirty(cfg, snapshot())
+        if (!r.pushed.length) return
+        syncTip.value = '已上传 ' + r.pushed.map((p) => p.split('/').pop()).join('、')
       } catch (e) {
         syncTip.value = '上传失败：' + (e.message || e)
       }

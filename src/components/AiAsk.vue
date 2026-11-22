@@ -1,7 +1,7 @@
 <script setup>
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, OUTSIDE_MARK } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
 
 const emit = defineEmits(['close', 'setup'])
@@ -18,6 +18,15 @@ const turns = ref([])
 const busy = ref(false)
 const box = ref(null)
 let ctrl = null
+
+// 面试前怕被 AI 的通用知识带偏，就锁死只查笔记
+const STRICT_KEY = 'myknowledge.askStrict'
+const strict = ref(localStorage.getItem(STRICT_KEY) === '1')
+watch(strict, (v) => {
+  try {
+    localStorage.setItem(STRICT_KEY, v ? '1' : '0')
+  } catch {}
+})
 
 const ready = computed(() => isAiReady(loadAI()))
 const stats = computed(() => libraryStats())
@@ -40,7 +49,15 @@ const ask = async (preset) => {
   }
 
   input.value = ''
-  turns.value.push({ q, a: '', used: [], streaming: true, err: '', fallback: false })
+  turns.value.push({
+    q,
+    a: '',
+    used: [],
+    streaming: true,
+    err: '',
+    fallback: false,
+    strict: strict.value,
+  })
   const turn = turns.value[turns.value.length - 1]
   busy.value = true
   scroll()
@@ -51,6 +68,7 @@ const ask = async (preset) => {
       question: q,
       history,
       cfg: loadAI(),
+      strict: strict.value,
       signal: ctrl.signal,
       onDelta: (_, full) => {
         turn.a = full
@@ -60,6 +78,7 @@ const ask = async (preset) => {
     turn.a = r.text
     turn.used = r.used
     turn.fallback = r.fallback
+    turn.strict = r.strict
   } catch (e) {
     if (e.name === 'AbortError') turn.a = turn.a || '（已停止）'
     else turn.err = String(e.message || e)
@@ -104,14 +123,28 @@ const rich = (text, used = []) => {
   })
   return s
 }
+
+// 回答里出现「【库外】」时，后面那段是模型自己的知识，要单独标出来
+const splitOutside = (text) => {
+  const s = String(text || '')
+  const i = s.indexOf(OUTSIDE_MARK)
+  if (i < 0) return { inside: s, outside: '' }
+  return { inside: s.slice(0, i).trim(), outside: s.slice(i + OUTSIDE_MARK.length).trim() }
+}
 </script>
 
 <template>
   <div class="ask">
-    <p class="ai-tip">
-      直接问知识库。AI 只在你的笔记里找答案，找不到就说没有。现在库里 {{ stats.notes }} 篇 /
-      {{ stats.blocks }} 个知识块。
-    </p>
+    <div class="ask-bar">
+      <p class="ai-tip">
+        先在你的笔记里找答案。笔记里没有、AI 自己知道的那部分会单独标成「库外」。现在库里
+        {{ stats.notes }} 篇 / {{ stats.blocks }} 个知识块。
+      </p>
+      <label class="ask-strict" :class="{ on: strict }">
+        <input type="checkbox" v-model="strict" />
+        <span>只查我的笔记</span>
+      </label>
+    </div>
 
     <div v-if="!turns.length" class="ask-sugs">
       <button v-for="s in SUGGEST" :key="s" class="ask-sug" @click="ask(s)">{{ s }}</button>
@@ -123,11 +156,16 @@ const rich = (text, used = []) => {
         <div class="ask-a">
           <p v-if="t.err" class="ai-msg bad">{{ t.err }}</p>
           <template v-else>
-            <div class="ask-text" v-html="rich(t.a, t.used)"></div>
+            <div class="ask-text" v-html="rich(splitOutside(t.a).inside, t.used)"></div>
+            <div v-if="splitOutside(t.a).outside" class="ask-outside">
+              <div class="ask-outside-tip">AI 的外部知识，不是你笔记里的内容</div>
+              <div class="ask-text" v-html="rich(splitOutside(t.a).outside, [])"></div>
+            </div>
             <span v-if="t.streaming" class="ask-caret">▍</span>
             <p v-if="!t.streaming && t.fallback" class="ask-none">
               库里没找到直接相关的笔记，上面是按最近更新的几篇答的
             </p>
+            <p v-if="!t.streaming && t.strict" class="ask-none">只查了你的笔记</p>
             <div v-if="!t.streaming && t.used.length" class="ask-src">
               <button v-for="(s, k) in t.used" :key="s.id" class="ask-chip" @click="jump(s.id)">
                 <span class="ask-chip-n">{{ k + 1 }}</span>{{ s.title }}

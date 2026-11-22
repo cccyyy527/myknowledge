@@ -31,8 +31,8 @@ export function clearRemote() {
 
 export const isConfigured = (c) => Boolean(c && c.owner && c.repo && c.token)
 
-const url = (c) =>
-  `https://api.github.com/repos/${c.owner}/${c.repo}/contents/${encodeURI(c.path)}`
+const apiBase = (c) => `https://api.github.com/repos/${c.owner}/${c.repo}/contents`
+const fileUrl = (c, path) => `${apiBase(c)}/${encodeURI(String(path).replace(/^\/+/, ''))}`
 
 const headers = (c) => ({
   Accept: 'application/vnd.github+json',
@@ -63,25 +63,26 @@ async function errText(res) {
   }
 }
 
-// 远端还没有 kb.json 时返回 null（首次上传的情况）
-export async function pull(cfg) {
-  const res = await fetch(`${url(cfg)}?ref=${encodeURIComponent(cfg.branch)}`, {
+// 读一个文件；不存在返回 null（首次上传 / 目录还没建）
+export async function getFile(cfg, path) {
+  const res = await fetch(`${fileUrl(cfg, path)}?ref=${encodeURIComponent(cfg.branch)}`, {
     headers: headers(cfg),
   })
   if (res.status === 404) return null
   if (!res.ok) throw new Error(await errText(res))
   const json = await res.json()
+  if (Array.isArray(json)) throw new Error(`${path} 是目录，不是文件`)
   return { data: JSON.parse(b64decode(json.content)), sha: json.sha }
 }
 
-export async function push(cfg, data, sha) {
+export async function putFile(cfg, path, data, sha, message) {
   const body = {
-    message: `kb: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`,
+    message: message || `kb: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`,
     content: b64encode(JSON.stringify(data, null, 2)),
     branch: cfg.branch,
   }
   if (sha) body.sha = sha
-  const res = await fetch(url(cfg), {
+  const res = await fetch(fileUrl(cfg, path), {
     method: 'PUT',
     headers: { ...headers(cfg), 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -89,4 +90,16 @@ export async function push(cfg, data, sha) {
   if (!res.ok) throw new Error(await errText(res))
   const json = await res.json()
   return json.content.sha
+}
+
+// 列目录拿各文件 sha：一次请求就知道哪些变了，不用逐个下载
+export async function listDir(cfg, dir) {
+  const res = await fetch(`${fileUrl(cfg, dir)}?ref=${encodeURIComponent(cfg.branch)}`, {
+    headers: headers(cfg),
+  })
+  if (res.status === 404) return []
+  if (!res.ok) throw new Error(await errText(res))
+  const json = await res.json()
+  if (!Array.isArray(json)) return []
+  return json.filter((f) => f.type === 'file').map((f) => ({ name: f.name, sha: f.sha }))
 }

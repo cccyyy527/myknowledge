@@ -27,74 +27,66 @@ const domain = computed(() => (topic.value ? domainById(topic.value.domainId) : 
 
 const mode = ref(localStorage.getItem('myknowledge.mode') || 'read')
 
-/* ---------- 切换模式后按「块」找回位置 ----------
-   编辑态和阅读态排版高度差很大，光靠 scrollY 会在切回来后错位（甚至被夹到顶部）。
-   切之前记住视口顶端是哪一块、离顶多远，切完再把这块对齐回原来的位置。 */
-let skipAnchor = false
-
-const grabAnchor = () => {
-  for (const el of document.querySelectorAll('.rd-block, .ed-row')) {
-    const r = el.getBoundingClientRect()
-    if (r.bottom <= 8) continue
-    if (!el.dataset.bid) return null
-    // 块被视口顶边裁掉了一部分时，记「被划过去了多少比例」，而不是绝对像素：
-    // 同一块在编辑态更高，按像素对齐会跑偏
-    const frac = r.top < 0 && r.height > 0 ? Math.min(1, -r.top / r.height) : 0
-    return { id: el.dataset.bid, top: r.top, frac }
-  }
-  return null
-}
-
-const putAnchor = (a) => {
-  if (!a) return
-  // 速查只看卡片，锚点那块可能被过滤掉了：顺着笔记顺序找最近的一个还在的块
-  let el = document.querySelector(`[data-bid="${a.id}"]`)
-  if (!el) {
-    const blocks = note.value?.blocks || []
-    const i = blocks.findIndex((b) => b.id === a.id)
-    for (let j = i + 1; i >= 0 && j < blocks.length && !el; j++) {
-      el = document.querySelector(`[data-bid="${blocks[j].id}"]`)
-    }
-  }
-  if (!el) return
-  const r = el.getBoundingClientRect()
-  const want = a.frac > 0 ? -a.frac * r.height : a.top
-  const d = r.top - want
-  if (Math.abs(d) > 1) window.scrollBy(0, d)
-}
+/* ---------- 切换模式后回到页面顶端 ----------
+   编辑态和阅读态排版高度不一样，硬记像素会错位，索性统一回顶部；
+   双击进编辑 / 新增小节这类自己会定位的入口除外。 */
+let keepScroll = false
 
 watch(mode, (m) => {
   localStorage.setItem('myknowledge.mode', m)
-  if (skipAnchor) {
-    skipAnchor = false
+  if (keepScroll) {
+    keepScroll = false
     return
   }
-  const a = grabAnchor()
-  nextTick(() => putAnchor(a))
+  nextTick(() => window.scrollTo(0, 0))
 })
 
 const savedAt = ref('')
 const saving = ref(false)
 let timer = null
+// 老数据可能没有 tags 字段，编辑态要往里 push，先补齐
 watch(
-  () => (note.value ? [note.value.title, note.value.tags, JSON.stringify(note.value.blocks)] : []),
-  () => {
-    if (!note.value) return
-    saving.value = true
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      touchNote(note.value)
-      saving.value = false
-      savedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    }, 700)
+  note,
+  (n) => {
+    if (n && !Array.isArray(n.tags)) n.tags = []
   },
+  { immediate: true },
 )
+// 只按「内容签名」判断要不要存：切模式、加空格子这类不改内容的操作不触发
+const editSig = computed(() =>
+  note.value
+    ? [
+        note.value.title || '',
+        JSON.stringify(note.value.tags || []),
+        JSON.stringify(note.value.blocks || []),
+      ].join('\u0001')
+    : '',
+)
+watch(editSig, () => {
+  if (!note.value) return
+  saving.value = true
+  clearTimeout(timer)
+  timer = setTimeout(() => {
+    touchNote(note.value)
+    saving.value = false
+    savedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }, 700)
+})
 
-const setTags = (v) => {
-  note.value.tags = v
-    .split(/[,，\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+// 标签一个一格：失焦时把空格子和空标签清掉
+const compactTags = () => {
+  if (!note.value) return
+  const next = (note.value.tags || []).map((t) => String(t || '').trim()).filter(Boolean)
+  const cur = note.value.tags || []
+  const same = next.length === cur.length && next.every((t, i) => t === cur[i])
+  if (!same) note.value.tags = next
+}
+
+// 标签格子跟着字长走：中文按两格算，别让一格占掉半行
+const tagWidth = (t) => {
+  let w = 0
+  for (const ch of String(t || '')) w += /[\u2e80-\u9fff\uff00-\uffef]/.test(ch) ? 2 : 1
+  return `${Math.min(14, Math.max(4, w + 2))}ch`
 }
 
 const SECTION_HINTS = {
@@ -198,7 +190,7 @@ const addSection = (afterSec = null) => {
   if (!note.value) return
   const b = { id: newBlockId(), type: 'heading', level: 2, text: '' }
   note.value.blocks.splice(afterSec ? sectionEndAt(afterSec) : note.value.blocks.length, 0, b)
-  skipAnchor = mode.value !== 'edit' // 这个入口自己会把新小节滚到眼前，别再用旧锚点拉回去
+  keepScroll = mode.value !== 'edit' // 这个入口自己会把新小节滚到眼前，别又拉回顶端
   mode.value = 'edit'
   nextTick(() => focusBlock(b.id))
 }
@@ -226,7 +218,7 @@ const moveSection = (sec, delta) => {
 
 /* ---------- 阅读 / 速查态双击直接改这一块 ---------- */
 const editAt = (blockId) => {
-  if (mode.value !== 'edit') skipAnchor = true // focusBlock 自己会定位到这一块
+  if (mode.value !== 'edit') keepScroll = true // focusBlock 自己会定位到这一块
   mode.value = 'edit'
   nextTick(() => focusBlock(blockId))
 }
@@ -284,6 +276,7 @@ const ocrWhere = computed(() => {
 const applyOcr = (patch) => {
   if (!patch) return
   spliceAtSectionEnd(ocrSec.value, patch)
+  if (mode.value !== 'edit') keepScroll = true // 刚插进来的块在中间，别跳到顶端
   mode.value = 'edit'
 }
 
@@ -373,22 +366,22 @@ const del = () => {
 
     <div v-if="mode === 'edit'" class="tag-row">
       <span class="adder-label">标签</span>
-      <input
-        class="inp inp-mini"
-        :value="(note.tags || []).join(', ')"
-        placeholder="CUPED, 协变量调整"
-        @change="setTags($event.target.value)"
-      />
+      <span v-for="(t, i) in note.tags" :key="i" class="tag-edit">
+        <input
+          v-model="note.tags[i]"
+          class="inp tag-inp"
+          placeholder="标签名"
+          :style="{ width: tagWidth(t) }"
+          @blur="compactTags"
+          @keyup.enter="$event.target.blur()"
+        />
+        <button class="tag-del" title="删掉这个标签" @click="note.tags.splice(i, 1)">×</button>
+      </span>
+      <button class="chip-btn" title="一个标签一格" @click="note.tags.push('')">+ 标签</button>
       <span class="muted">同子分类内用标签切片，不必再加一层目录</span>
     </div>
 
     <template v-if="mode === 'edit'">
-      <p class="ed-tip">
-        两条轴别混：<strong>段落是叙事位置</strong>（你在论证的哪一步），<strong>块是信息形态</strong>（这条知识长什么样）。
-        同一个概念卡，解释「是什么」就放核心结论段，支撑「凭什么」就放推导段。点分区末尾的 + 决定它落在哪一段；
-        小节可以自己加、自己删、整节上下挪。公式懒得手打就截图按 <kbd>Ctrl</kbd>+<kbd>V</kbd>，识别完核对再插。
-        阅读态里<strong>双击任何一块</strong>就跳到这一块的编辑框。
-      </p>
       <div class="blocks">
         <section
           v-for="(sec, si) in sections"

@@ -31,10 +31,14 @@ let updatedAt = Number(localStorage.getItem(TS_KEY)) || 0
 export const lastUpdated = () => updatedAt
 
 // 深拷贝快照：上传远端 / 导出 JSON 都走这里
+// 标签在编辑态可能是「刚加的空格子」，出库前清掉，别把空串写进云端
 export const snapshot = () => ({
   domains: JSON.parse(JSON.stringify(state.domains)),
   topics: JSON.parse(JSON.stringify(state.topics)),
-  notes: JSON.parse(JSON.stringify(state.notes)),
+  notes: JSON.parse(JSON.stringify(state.notes)).map((n) => ({
+    ...n,
+    tags: (n.tags || []).map((t) => String(t).trim()).filter(Boolean),
+  })),
   updatedAt,
 })
 

@@ -13,8 +13,22 @@ export function hashStr(s) {
   return (h >>> 0).toString(36)
 }
 
-// updatedAt 每次保存都会变，一旦参与比对就永远「有变化」，所以只比内容
-export const fileKey = (f) => hashStr(JSON.stringify([f.schema, f.domainId, f.notes]))
+// 推到云端的文件里不带 updatedAt：它每次保存都变，带上就等于每次都产生 diff
+export const fileBody = (f) => ({ schema: f.schema, domainId: f.domainId, notes: f.notes })
+export const indexBody = (i) => ({ schema: i.schema, domains: i.domains || [], topics: i.topics || [] })
+
+// 「内容指纹」：只看真内容，不看 updatedAt / version。
+// 时间戳和版本号每次保存都变，算进去就等于每次都推，云端会堆满只有一行的 commit。
+const noteSig = (n) => {
+  const { updatedAt, version, ...rest } = n
+  return rest
+}
+export const fileKey = (f) => hashStr(JSON.stringify([f.schema, f.domainId, (f.notes || []).map(noteSig)]))
+
+// 老版本把 note.updatedAt 也算进指纹。留着它只为了认得出「升级前存下的指纹」，
+// 免得升到新版本后第一次同步把所有域文件重推一遍。
+const fileKeyLegacy = (f) => hashStr(JSON.stringify([f.schema, f.domainId, f.notes]))
+export const keyMatches = (stored, f) => Boolean(stored) && (stored === fileKey(f) || stored === fileKeyLegacy(f))
 export const indexKey = (i) => hashStr(JSON.stringify([i.schema, i.domains, i.topics]))
 
 export const dirOf = (p) => {
@@ -40,12 +54,17 @@ export function domainOfNote(note, topics) {
 
 // 每个域都出一个文件（空的也出），这样把某域笔记删光时远端文件会被清成 []，
 // 而不是残留旧内容等着下次被拉回来
+// 标签在编辑态可能是「刚加的空格子」，文件里不该有这种东西
+const tidyNote = (n) => ({
+  ...n,
+  tags: (n.tags || []).map((t) => String(t || '').trim()).filter(Boolean),
+})
+
 export function splitSnapshot(snap) {
   const index = {
     schema: SCHEMA,
     domains: snap.domains || [],
     topics: snap.topics || [],
-    updatedAt: snap.updatedAt || 0,
   }
 
   const buckets = new Map()
@@ -53,7 +72,7 @@ export function splitSnapshot(snap) {
   for (const n of snap.notes || []) {
     const id = domainOfNote(n, index.topics)
     if (!buckets.has(id)) buckets.set(id, [])
-    buckets.get(id).push(n)
+    buckets.get(id).push(tidyNote(n))
   }
 
   const files = {}
@@ -61,7 +80,6 @@ export function splitSnapshot(snap) {
     files[noteFileOf(domainId)] = {
       schema: SCHEMA,
       domainId,
-      updatedAt: index.updatedAt,
       notes,
     }
   }

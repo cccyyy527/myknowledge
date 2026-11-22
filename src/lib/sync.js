@@ -5,7 +5,11 @@ import {
   SCHEMA,
   splitSnapshot,
   fileKey,
+  keyMatches,
   indexKey,
+  fileBody,
+  indexBody,
+  hashStr,
   notesDirOf,
   notePathOf,
   noteFileOf,
@@ -14,14 +18,16 @@ import {
 
 const META_KEY = 'myknowledge.syncmeta'
 
-const emptyMeta = () => ({ sha: {}, key: {} })
+const bodyHash = (o) => hashStr(JSON.stringify(o))
+
+const emptyMeta = () => ({ sha: {}, key: {}, body: {} })
 
 function readMeta() {
   try {
     const raw = localStorage.getItem(META_KEY)
     if (raw) {
       const m = JSON.parse(raw)
-      return { sha: m.sha || {}, key: m.key || {} }
+      return { sha: m.sha || {}, key: m.key || {}, body: m.body || {} }
     }
   } catch (e) {
     console.warn('同步元数据读取失败', e)
@@ -72,7 +78,7 @@ export async function pullAll(cfg, localSnap, { ignoreLocal = false } = {}) {
           updatedAt: idx.data.updatedAt || 0,
         }
       : localSnap
-    writeMeta({ sha: { [cfg.path]: idx.sha }, key: {} })
+    writeMeta({ sha: { [cfg.path]: idx.sha }, key: {}, body: {} })
     return { snapshot: snap, changed: remoteNewer, legacy: true }
   }
 
@@ -93,6 +99,7 @@ export async function pullAll(cfg, localSnap, { ignoreLocal = false } = {}) {
       useIndex = remoteIndex
       meta.sha[cfg.path] = idx.sha
       meta.key[cfg.path] = indexKey(remoteIndex)
+      meta.body[cfg.path] = bodyHash(indexBody(remoteIndex))
       changed = true
     }
   } else if (first) {
@@ -120,7 +127,7 @@ export async function pullAll(cfg, localSnap, { ignoreLocal = false } = {}) {
       continue
     }
     const lf = local.files[name]
-    const localClean = ignoreLocal || !meta.key[path] || meta.key[path] === fileKey(lf)
+    const localClean = ignoreLocal || !meta.key[path] || keyMatches(meta.key[path], lf)
     if (!localClean) continue // 本地也改了，本地赢
 
     const r = await getFile(cfg, path)
@@ -129,6 +136,7 @@ export async function pullAll(cfg, localSnap, { ignoreLocal = false } = {}) {
     byDomain.set(domainId, rf.notes)
     meta.sha[path] = r.sha
     meta.key[path] = fileKey(rf)
+    meta.body[path] = bodyHash(fileBody(rf))
     changed = true
   }
 
@@ -172,29 +180,34 @@ export async function pushDirty(cfg, localSnap, { force = false } = {}) {
   const pushed = []
 
   const ik = indexKey(index)
-  if (force || meta.key[cfg.path] !== ik) {
-    const sha = await putSafe(cfg, cfg.path, '', index, 'kb: 目录与分类')
+  const ib = bodyHash(indexBody(index))
+  if (force || (meta.key[cfg.path] !== ik && meta.body[cfg.path] !== ib)) {
+    const sha = await putSafe(cfg, cfg.path, '', indexBody(index), 'kb: 目录与分类')
     meta.sha[cfg.path] = sha
     meta.key[cfg.path] = ik
+    meta.body[cfg.path] = ib
     pushed.push(cfg.path)
   }
 
   const need = []
   for (const f of Object.values(files)) {
     const path = notePathOf(cfg, f.domainId)
-    if (force || meta.key[path] !== fileKey(f)) need.push({ path, f })
+    const fb = bodyHash(fileBody(f))
+    // 内容真的变了才提交：updatedAt / version 这类每次都变的字段不该在云端留空 commit
+    if (force || (!keyMatches(meta.key[path], f) && meta.body[path] !== fb)) need.push({ path, f, fb })
   }
 
   if (need.length) {
     const dir = notesDirOf(cfg)
     const remote = new Map((await listDir(cfg, dir)).map((x) => [x.name, x.sha]))
-    for (const { path, f } of need) {
+    for (const { path, f, fb } of need) {
       const name = noteFileOf(f.domainId)
       // 远端已有同名的就带上它的 sha，没有就走新建
       if (remote.has(name)) meta.sha[path] = remote.get(name)
-      const sha = await putSafe(cfg, path, dir, f, `kb: ${name}`)
+      const sha = await putSafe(cfg, path, dir, fileBody(f), `kb: ${name}`)
       meta.sha[path] = sha
       meta.key[path] = fileKey(f)
+      meta.body[path] = fb
       pushed.push(path)
     }
   }

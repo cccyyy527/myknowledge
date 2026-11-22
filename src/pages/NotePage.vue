@@ -26,7 +26,52 @@ const path = computed(() => (topic.value ? topicPath(topic.value.id) : []))
 const domain = computed(() => (topic.value ? domainById(topic.value.domainId) : null))
 
 const mode = ref(localStorage.getItem('myknowledge.mode') || 'read')
-watch(mode, (m) => localStorage.setItem('myknowledge.mode', m))
+
+/* ---------- 切换模式后按「块」找回位置 ----------
+   编辑态和阅读态排版高度差很大，光靠 scrollY 会在切回来后错位（甚至被夹到顶部）。
+   切之前记住视口顶端是哪一块、离顶多远，切完再把这块对齐回原来的位置。 */
+let skipAnchor = false
+
+const grabAnchor = () => {
+  for (const el of document.querySelectorAll('.rd-block, .ed-row')) {
+    const r = el.getBoundingClientRect()
+    if (r.bottom <= 8) continue
+    if (!el.dataset.bid) return null
+    // 块被视口顶边裁掉了一部分时，记「被划过去了多少比例」，而不是绝对像素：
+    // 同一块在编辑态更高，按像素对齐会跑偏
+    const frac = r.top < 0 && r.height > 0 ? Math.min(1, -r.top / r.height) : 0
+    return { id: el.dataset.bid, top: r.top, frac }
+  }
+  return null
+}
+
+const putAnchor = (a) => {
+  if (!a) return
+  // 速查只看卡片，锚点那块可能被过滤掉了：顺着笔记顺序找最近的一个还在的块
+  let el = document.querySelector(`[data-bid="${a.id}"]`)
+  if (!el) {
+    const blocks = note.value?.blocks || []
+    const i = blocks.findIndex((b) => b.id === a.id)
+    for (let j = i + 1; i >= 0 && j < blocks.length && !el; j++) {
+      el = document.querySelector(`[data-bid="${blocks[j].id}"]`)
+    }
+  }
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const want = a.frac > 0 ? -a.frac * r.height : a.top
+  const d = r.top - want
+  if (Math.abs(d) > 1) window.scrollBy(0, d)
+}
+
+watch(mode, (m) => {
+  localStorage.setItem('myknowledge.mode', m)
+  if (skipAnchor) {
+    skipAnchor = false
+    return
+  }
+  const a = grabAnchor()
+  nextTick(() => putAnchor(a))
+})
 
 const savedAt = ref('')
 const saving = ref(false)
@@ -153,6 +198,7 @@ const addSection = (afterSec = null) => {
   if (!note.value) return
   const b = { id: newBlockId(), type: 'heading', level: 2, text: '' }
   note.value.blocks.splice(afterSec ? sectionEndAt(afterSec) : note.value.blocks.length, 0, b)
+  skipAnchor = mode.value !== 'edit' // 这个入口自己会把新小节滚到眼前，别再用旧锚点拉回去
   mode.value = 'edit'
   nextTick(() => focusBlock(b.id))
 }
@@ -180,6 +226,7 @@ const moveSection = (sec, delta) => {
 
 /* ---------- 阅读 / 速查态双击直接改这一块 ---------- */
 const editAt = (blockId) => {
+  if (mode.value !== 'edit') skipAnchor = true // focusBlock 自己会定位到这一块
   mode.value = 'edit'
   nextTick(() => focusBlock(blockId))
 }
@@ -392,6 +439,7 @@ const del = () => {
         :key="b.id"
         class="rd-block"
         :class="{ 'is-touch': isTouch }"
+        :data-bid="b.id"
         :title="isTouch ? '点右上角 ✎ 改这一块' : '双击改这一块'"
         @dblclick="editAt(b.id)"
       >

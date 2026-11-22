@@ -41,7 +41,7 @@ const LABELS = {
 </script>
 
 <template>
-  <div class="ed-row" :class="'ed-' + block.type">
+  <div class="ed-row" :class="'ed-' + block.type" :data-bid="block.id">
     <div class="ed-label">
       <span>{{ LABELS[block.type] || block.type }}</span>
       <span class="ed-actions">
@@ -50,7 +50,13 @@ const LABELS = {
         </button>
         <button title="上移" @click="emit('move', -1)">↑</button>
         <button title="下移" @click="emit('move', 1)">↓</button>
-        <button v-if="deletable" title="删除" @click="emit('remove')">×</button>
+        <button
+          v-if="deletable"
+          :title="block.type === 'heading' ? '删掉这一节（含里面的块）' : '删除'"
+          @click="emit('remove')"
+        >
+          ×
+        </button>
       </span>
     </div>
 

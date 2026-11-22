@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { loadAI, isAiReady, reviseNote, applyOps } from '../lib/ai.js'
+import { loadAI, isAiReady, reviseNote, applyOps, SECTIONS } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
 
 const props = defineProps({
@@ -43,6 +43,14 @@ watch(
 )
 
 const ready = computed(() => isAiReady(cfg.value))
+
+// 整篇助手只按固定五段重排：自定义小节会被并回去，先提醒一句
+const customSecs = computed(() => {
+  const known = new Set(SECTIONS.map((s) => s.title))
+  return (props.note?.blocks || [])
+    .filter((b) => b.type === 'heading' && b.level === 2 && b.text && !known.has(b.text))
+    .map((b) => b.text)
+})
 
 // 改动和新增默认勾上，删除默认不勾 —— 抹内容得人手点一下
 const decorate = (ops) =>
@@ -114,6 +122,11 @@ const apply = () => {
           {{ p }}
         </button>
       </div>
+
+      <p v-if="customSecs.length" class="ai-msg">
+        这篇有自己起的小节（{{ customSecs.join('、') }}）。整篇助手只按固定五段重排，
+        那几个小节的标题会被并回去 —— 里面的块不会丢，只是归到相邻的一段。
+      </p>
 
       <div class="ai-acts">
         <button

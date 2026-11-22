@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   noteById,
@@ -129,6 +129,52 @@ const moveBlock = (i, delta) => {
 
 const removeBlock = (i) => note.value.blocks.splice(i, 1)
 
+/* ---------- 小节：增 / 删 / 整节上下移 ---------- */
+const focusBlock = (id) => {
+  const row = document.querySelector(`.ed-row[data-bid="${id}"]`)
+  const inp = row && row.querySelector('input, textarea, select')
+  if (!inp) return
+  inp.focus()
+  if (inp.value && typeof inp.setSelectionRange === 'function') {
+    inp.setSelectionRange(inp.value.length, inp.value.length)
+  }
+}
+
+const addSection = (afterSec = null) => {
+  if (!note.value) return
+  const b = { id: newBlockId(), type: 'heading', level: 2, text: '' }
+  note.value.blocks.splice(afterSec ? sectionEndAt(afterSec) : note.value.blocks.length, 0, b)
+  mode.value = 'edit'
+  nextTick(() => focusBlock(b.id))
+}
+
+const removeSection = (sec) => {
+  if (!note.value || !sec?.heading) return
+  const from = sec.heading.index
+  const end = sectionEndAt(sec)
+  const n = end - from - 1
+  const title = sec.heading.block.text || '未命名小节'
+  if (n > 0 && !confirm(`删掉「${title}」这一节？里面的 ${n} 个块会一起删掉。`)) return
+  note.value.blocks.splice(from, end - from)
+}
+
+const moveSection = (sec, delta) => {
+  if (!note.value) return
+  const groups = sections.value.map((s) => note.value.blocks.slice(s.heading ? s.heading.index : 0, sectionEndAt(s)))
+  const i = sections.value.indexOf(sec)
+  const j = i + delta
+  if (i < 0 || j < 0 || j >= groups.length) return
+  const [g] = groups.splice(i, 1)
+  groups.splice(j, 0, g)
+  note.value.blocks.splice(0, note.value.blocks.length, ...groups.flat())
+}
+
+/* ---------- 阅读 / 速查态双击直接改这一块 ---------- */
+const editAt = (blockId) => {
+  mode.value = 'edit'
+  nextTick(() => focusBlock(blockId))
+}
+
 /* ---------- AI 改写单块 ---------- */
 const aiTarget = ref(null) // { index, block, sectionTitle }
 const wholeAi = ref(false)
@@ -247,6 +293,7 @@ const del = () => {
         </button>
         <button class="btn-ghost danger" @click="del">删除</button>
       </div>
+      <p v-if="mode !== 'edit'" class="dbl-tip">双击正文里任意一块，直接改那一块</p>
     </div>
 
     <p class="note-meta">
@@ -272,8 +319,9 @@ const del = () => {
     <template v-if="mode === 'edit'">
       <p class="ed-tip">
         两条轴别混：<strong>段落是叙事位置</strong>（你在论证的哪一步），<strong>块是信息形态</strong>（这条知识长什么样）。
-        同一个概念卡，解释「是什么」就放核心结论段，支撑「凭什么」就放推导段。点分区末尾的 + 决定它落在哪一段。
-        公式懒得手打就截图按 <kbd>Ctrl</kbd>+<kbd>V</kbd>，识别完核对再插。
+        同一个概念卡，解释「是什么」就放核心结论段，支撑「凭什么」就放推导段。点分区末尾的 + 决定它落在哪一段；
+        小节可以自己加、自己删、整节上下挪。公式懒得手打就截图按 <kbd>Ctrl</kbd>+<kbd>V</kbd>，识别完核对再插。
+        阅读态里<strong>双击任何一块</strong>就跳到这一块的编辑框。
       </p>
       <div class="blocks">
         <section
@@ -285,8 +333,8 @@ const del = () => {
           <BlockEdit
             v-if="sec.heading"
             :block="sec.heading.block"
-            :deletable="false"
-            @move="(d) => moveBlock(sec.heading.index, d)"
+            @remove="removeSection(sec)"
+            @move="(d) => moveSection(sec, d)"
           />
           <p v-if="hintOf(sec)" class="sec-hint">{{ hintOf(sec) }}</p>
           <BlockEdit
@@ -306,13 +354,29 @@ const del = () => {
             <button class="chip-btn" title="截图 → 公式，不用手打" @click="openOcr(sec)">
               📷 识图
             </button>
+            <button class="chip-btn" title="在这一节后面新起一节" @click="addSection(sec)">
+              ⁝ 新小节
+            </button>
           </div>
         </section>
+
+        <div class="ed-section-add">
+          <button class="chip-btn" @click="addSection(null)">+ 在文末新起一节</button>
+          <span class="muted">小节就是二级标题；不想要的节点标题那行的 × 删掉</span>
+        </div>
       </div>
     </template>
 
     <article v-else class="blocks">
-      <BlockView v-for="b in visibleBlocks" :key="b.id" :block="b" />
+      <div
+        v-for="b in visibleBlocks"
+        :key="b.id"
+        class="rd-block"
+        title="双击改这一块"
+        @dblclick="editAt(b.id)"
+      >
+        <BlockView :block="b" />
+      </div>
       <p v-if="mode === 'quick' && visibleBlocks.length <= 1" class="muted">
         这篇还没有概念 / 公式 / 问答 / 坑卡片。
       </p>

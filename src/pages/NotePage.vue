@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   noteById,
   topicById,
+  topicPath,
   domainById,
   touchNote,
   removeNote,
@@ -17,6 +18,7 @@ const route = useRoute()
 const router = useRouter()
 const note = computed(() => noteById(route.params.noteId))
 const topic = computed(() => (note.value ? topicById(note.value.topicId) : null))
+const path = computed(() => (topic.value ? topicPath(topic.value.id) : []))
 const domain = computed(() => (topic.value ? domainById(topic.value.domainId) : null))
 
 const mode = ref(localStorage.getItem('myknowledge.mode') || 'read')
@@ -126,7 +128,10 @@ const del = () => {
     <nav class="crumb">
       <RouterLink to="/">知识库</RouterLink> /
       <RouterLink :to="`/d/${domain.id}`">{{ domain.name }}</RouterLink> /
-      <RouterLink :to="`/t/${topic.id}`">{{ topic.name }}</RouterLink>
+      <template v-for="(p, i) in path" :key="p.id">
+        <RouterLink :to="`/t/${p.id}`">{{ p.name }}</RouterLink>
+        <span v-if="i < path.length - 1"> / </span>
+      </template>
     </nav>
 
     <div class="note-head">

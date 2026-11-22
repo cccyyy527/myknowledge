@@ -2,7 +2,7 @@ import { reactive, watch } from 'vue'
 import { DOMAINS, TOPICS, DEMO_NOTE } from './seed.js'
 
 // 原型阶段：全部数据放 localStorage，刷新不丢；清浏览器数据会丢
-const KEY = 'myknowledge.v2'
+const KEY = 'myknowledge.v3'
 
 const initial = () => ({
   domains: DOMAINS,
@@ -43,9 +43,56 @@ watch(
 export const topicById = (id) => state.topics.find((t) => t.id === id)
 export const domainById = (id) => state.domains.find((d) => d.id === id)
 export const noteById = (id) => state.notes.find((n) => n.id === id)
-export const topicsOf = (domainId) => state.topics.filter((t) => t.domainId === domainId)
+
+// 一级分类（挂在域下面，parentId === ''）
+export const topicsOf = (domainId) =>
+  state.topics.filter((t) => t.domainId === domainId && !t.parentId)
+
+export const childrenOf = (topicId) => state.topics.filter((t) => t.parentId === topicId)
+export const isLeaf = (topicId) => childrenOf(topicId).length === 0
+
+// 从根到自己的祖先链
+export function topicPath(topicId) {
+  const out = []
+  let cur = topicById(topicId)
+  while (cur) {
+    out.unshift(cur)
+    cur = cur.parentId ? topicById(cur.parentId) : null
+  }
+  return out
+}
+
+// 自己 + 全部后代
+export function subtreeIds(topicId) {
+  const out = [topicId]
+  for (const c of childrenOf(topicId)) out.push(...subtreeIds(c.id))
+  return out
+}
+
+// 扁平化成带缩进层级的可见列表，用于侧边栏渲染；isOpen 传 true 表示全展开
+export function flattenTopics(domainId, isOpen) {
+  const opened = (id) => (typeof isOpen === 'boolean' ? isOpen : !!isOpen[id])
+  const out = []
+  const walk = (list, depth) => {
+    for (const t of list) {
+      const kids = childrenOf(t.id)
+      out.push({ topic: t, depth, hasKids: kids.length > 0, open: opened(t.id) })
+      if (kids.length && opened(t.id)) walk(kids, depth + 1)
+    }
+  }
+  walk(topicsOf(domainId), 0)
+  return out
+}
+
 export const notesOfTopic = (topicId) =>
   state.notes.filter((n) => n.topicId === topicId).sort(byPinnedThenUpdated)
+
+// 含下级的笔记，用于「分组」页汇总
+export function notesOfSubtree(topicId) {
+  const ids = new Set(subtreeIds(topicId))
+  return state.notes.filter((n) => ids.has(n.topicId)).sort(byPinnedThenUpdated)
+}
+
 export const notesOfDomain = (domainId) =>
   state.notes.filter((n) => n.domainId === domainId).sort(byPinnedThenUpdated)
 
@@ -75,22 +122,101 @@ export function noteSummary(note) {
 }
 
 export function domainStats(domainId) {
-  const topics = topicsOf(domainId)
+  const all = state.topics.filter((t) => t.domainId === domainId)
+  const leaves = all.filter((t) => isLeaf(t.id))
   const notes = notesOfDomain(domainId)
   return {
-    topics: topics.length,
-    covered: topics.filter((t) => notesOfTopic(t.id).length > 0).length,
+    topics: all.length,
+    leaves: leaves.length,
+    covered: leaves.filter((t) => notesOfTopic(t.id).length > 0).length,
     notes: notes.length,
     todos: notes.reduce((s, n) => s + countType(n, 'todo'), 0),
   }
 }
 
 export function topicStats(topicId) {
-  const notes = notesOfTopic(topicId)
+  const own = notesOfTopic(topicId)
+  const all = notesOfSubtree(topicId)
   return {
-    notes: notes.length,
-    todos: notes.reduce((s, n) => s + countType(n, 'todo'), 0),
+    notes: own.length,
+    all: all.length,
+    kids: childrenOf(topicId).length,
+    todos: all.reduce((s, n) => s + countType(n, 'todo'), 0),
   }
+}
+
+/* ---------------- 目录编辑 ---------------- */
+
+const uid = (p) => p + Math.random().toString(36).slice(2, 8)
+
+export function createDomain(name = '新域') {
+  const d = { id: uid('d-'), slug: '', name }
+  state.domains.push(d)
+  return d
+}
+
+export function createTopic(domainId, parentId = '', name = '新分类') {
+  const t = { id: uid('t-'), domainId, parentId, slug: '', name }
+  state.topics.push(t)
+  return t
+}
+
+export function renameDomain(id, name) {
+  const d = domainById(id)
+  if (d && name.trim()) d.name = name.trim()
+}
+
+export function renameTopic(id, name) {
+  const t = topicById(id)
+  if (t && name.trim()) t.name = name.trim()
+}
+
+export function moveTopic(id, delta) {
+  const t = topicById(id)
+  if (!t) return
+  const siblings = state.topics.filter((x) => x.domainId === t.domainId && x.parentId === t.parentId)
+  const i = siblings.indexOf(t)
+  const j = i + delta
+  if (j < 0 || j >= siblings.length) return
+  // 在全局数组里交换，保持同级相对顺序
+  const a = state.topics.indexOf(siblings[i])
+  const b = state.topics.indexOf(siblings[j])
+  ;[state.topics[a], state.topics[b]] = [state.topics[b], state.topics[a]]
+}
+
+// 该域下的「未归类」兜底分类，删分类时笔记落这里
+function inboxOf(domainId) {
+  let t = state.topics.find((x) => x.domainId === domainId && x.slug === 'inbox')
+  if (!t) {
+    t = { id: uid('t-'), domainId, parentId: '', slug: 'inbox', name: '未归类' }
+    state.topics.unshift(t)
+  }
+  return t
+}
+
+// 删分类：笔记上移到父级；一级分类的笔记落到「未归类」。返回被移动的笔记数
+export function removeTopic(topicId) {
+  const t = topicById(topicId)
+  if (!t) return 0
+  const fallback = t.parentId ? topicById(t.parentId) : inboxOf(t.domainId)
+  const ids = new Set(subtreeIds(topicId))
+  let moved = 0
+  for (const n of state.notes) {
+    if (ids.has(n.topicId)) {
+      n.topicId = fallback.id
+      moved++
+    }
+  }
+  state.topics = state.topics.filter((x) => !ids.has(x.id))
+  return moved
+}
+
+export function removeDomain(domainId) {
+  if (notesOfDomain(domainId).length) return false
+  const ids = new Set(state.topics.filter((t) => t.domainId === domainId).map((t) => t.id))
+  state.topics = state.topics.filter((t) => !ids.has(t.id))
+  state.domains = state.domains.filter((d) => d.id !== domainId)
+  return true
 }
 
 export function createNote(topicId) {

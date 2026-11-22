@@ -803,3 +803,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
   .ins-box { max-width: none; border-radius: 14px 14px 0 0; padding: 14px 14px calc(18px + env(safe-area-inset-bottom, 0px)); }
   .ins-grid .chip-btn { padding: 8px 12px; }
 }
+
+.ins-side { display: flex; gap: 6px; margin: 0 0 10px; }
+.ins-side .chip-btn.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.ins-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

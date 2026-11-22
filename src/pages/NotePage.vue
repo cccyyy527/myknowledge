@@ -205,16 +205,33 @@ const removeBlock = (i) => note.value.blocks.splice(i, 1)
 /* ---------- 在任意两块之间插内容（两节之间就是从下一节标题前面插） ---------- */
 // 点某块的「＋」，先记下插入点，再在面板里选要插什么
 const insertAt = ref(null)
+// 默认插在这块前面；面板上可以改成后面 —— 想在 A、B 两块中间插，点 A 选「后面」或点 B 选「前面」都行
+const insertSide = ref('before')
 
 const openInsert = (index) => {
+  insertSide.value = 'before'
   insertAt.value = index
 }
+
+const blockLabel = (b) => {
+  if (!b) return '这一块'
+  if (b.type === 'heading') return '小节标题'
+  return ADD.find((a) => a[0] === b.type)?.[1] || b.type
+}
+
+const insertWhere = computed(() => {
+  const b = note.value?.blocks?.[insertAt.value]
+  const name = b?.text ? `「${String(b.text).slice(0, 12)}」` : `「${blockLabel(b)}」`
+  return `插在${name}${insertSide.value === 'after' ? '后面' : '前面'}`
+})
+
+const insertPos = () => insertAt.value + (insertSide.value === 'after' ? 1 : 0)
 
 const insertBlockBefore = (type) => {
   const def = ADD.find((a) => a[0] === type)
   if (!def || !note.value || insertAt.value === null) return
   const b = { id: newBlockId(), type, ...structuredClone(def[2]) }
-  note.value.blocks.splice(insertAt.value, 0, b)
+  note.value.blocks.splice(insertPos(), 0, b)
   insertAt.value = null
   nextTick(() => focusBlock(b.id))
 }
@@ -222,7 +239,7 @@ const insertBlockBefore = (type) => {
 const insertSectionBefore = () => {
   if (!note.value || insertAt.value === null) return
   const b = { id: newBlockId(), type: 'heading', level: 2, text: '' }
-  note.value.blocks.splice(insertAt.value, 0, b)
+  note.value.blocks.splice(insertPos(), 0, b)
   insertAt.value = null
   nextTick(() => focusBlock(b.id))
 }
@@ -487,7 +504,7 @@ const del = () => {
         <div class="ed-section-add">
           <button class="chip-btn" @click="addSection(null)">+ 在文末新起一节</button>
           <span class="muted">
-            小节就是二级标题；不想要的节点标题那行的 × 删掉。要在两块之间插，点那块标题行上的 ＋
+            小节就是二级标题；不想要的节点标题那行的 × 删掉。要在两块之间插，点上面那块的 ＋ 选「插在后面」（或下面那块的 ＋ 选「插在前面」）
           </span>
         </div>
       </div>
@@ -531,8 +548,24 @@ const del = () => {
       <div class="ins-box">
         <div class="ins-head">
           <strong>插在这里</strong>
-          <span class="muted">第 {{ insertAt + 1 }} 块前面</span>
+          <span class="muted ins-where">{{ insertWhere }}</span>
           <button class="btn-ghost" @click="insertAt = null">×</button>
+        </div>
+        <div class="ins-side">
+          <button
+            class="chip-btn"
+            :class="{ on: insertSide === 'before' }"
+            @click="insertSide = 'before'"
+          >
+            插在前面
+          </button>
+          <button
+            class="chip-btn"
+            :class="{ on: insertSide === 'after' }"
+            @click="insertSide = 'after'"
+          >
+            插在后面
+          </button>
         </div>
         <div class="ins-grid">
           <button v-for="a in ADD" :key="a[0]" class="chip-btn" @click="insertBlockBefore(a[0])">

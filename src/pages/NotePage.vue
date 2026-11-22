@@ -125,6 +125,14 @@ const tagWidth = (t) => {
   return `${Math.min(14, Math.max(4, w + 2))}ch`
 }
 
+// 阅读态把标签也显示出来：去掉空标签和重复
+const readTags = computed(() => {
+  const seen = new Set()
+  return (note.value?.tags || [])
+    .map((t) => String(t || '').trim())
+    .filter((t) => t && !seen.has(t) && seen.add(t))
+})
+
 const SECTION_HINTS = {
   核心结论: '只放断言：一句能被追问「凭什么」的话，带关键数字。名词解释用概念卡，别拿定义当结论。',
   '推导 / 细节': '支撑上面那句断言的东西：公式、成立的前提、无偏性、和替代方案比。',
@@ -443,6 +451,11 @@ const del = () => {
       <span v-if="noteBadges(note).pitfalls" class="chip">坑 {{ noteBadges(note).pitfalls }}</span>
       <span v-if="noteBadges(note).todos" class="chip warn">待补 {{ noteBadges(note).todos }}</span>
     </p>
+
+    <div v-if="mode !== 'edit' && readTags.length" class="tag-read">
+      <span class="adder-label">标签</span>
+      <span v-for="t in readTags" :key="t" class="tag">#{{ t }}</span>
+    </div>
 
     <div v-if="mode === 'edit'" class="tag-row">
       <span class="adder-label">标签</span>

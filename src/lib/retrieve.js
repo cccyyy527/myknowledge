@@ -84,7 +84,9 @@ function noteDigest(note, idx) {
   return lines.join('\n')
 }
 
-const byUpdated = (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+const byUpdated = (a, b) =>
+  (new Date(b.updatedAt || b.createdAt || 0).getTime() || 0) -
+  (new Date(a.updatedAt || a.createdAt || 0).getTime() || 0)
 
 // 命中的笔记 + 分数，给 UI 里「翻了哪几篇」用
 // extra：追问时把上一轮的问题也拿来找，只算半票

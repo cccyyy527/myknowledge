@@ -13,8 +13,21 @@ export function hashStr(s) {
   return (h >>> 0).toString(36)
 }
 
-// 推到云端的文件里不带 updatedAt：它每次保存都变，带上就等于每次都产生 diff
-export const fileBody = (f) => ({ schema: f.schema, domainId: f.domainId, notes: f.notes })
+// 只在本地有意义的字段：updatedAt 每次保存都变、version 已经不用了。
+// 推到云端一律去掉，否则每次同步 git 里都多一行时间戳。
+const PUSH_DROP = ['updatedAt', 'version']
+const forPush = (n) => {
+  const out = { ...n }
+  for (const k of PUSH_DROP) delete out[k]
+  return out
+}
+
+// 文件正文：连文件级 updatedAt 一起没有，整份文件里不出现任何时间戳（createdAt 除外，它不变）
+export const fileBody = (f) => ({
+  schema: f.schema,
+  domainId: f.domainId,
+  notes: (f.notes || []).map(forPush),
+})
 export const indexBody = (i) => ({ schema: i.schema, domains: i.domains || [], topics: i.topics || [] })
 
 // 「内容指纹」：只看真内容，不看 updatedAt / version。
@@ -55,10 +68,11 @@ export function domainOfNote(note, topics) {
 // 每个域都出一个文件（空的也出），这样把某域笔记删光时远端文件会被清成 []，
 // 而不是残留旧内容等着下次被拉回来
 // 标签在编辑态可能是「刚加的空格子」，文件里不该有这种东西
-const tidyNote = (n) => ({
-  ...n,
-  tags: (n.tags || []).map((t) => String(t || '').trim()).filter(Boolean),
-})
+const tidyNote = (n) =>
+  forPush({
+    ...n,
+    tags: (n.tags || []).map((t) => String(t || '').trim()).filter(Boolean),
+  })
 
 export function splitSnapshot(snap) {
   const index = {

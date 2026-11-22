@@ -16,7 +16,7 @@ import {
   applyRemote,
 } from './lib/store.js'
 import { loadRemote, isConfigured } from './lib/remote.js'
-import { pullAll, pushDirty } from './lib/sync.js'
+import { pullAll, pushDirty, needsRestamp } from './lib/sync.js'
 import SyncDialog from './components/SyncDialog.vue'
 import AiPanel from './components/AiPanel.vue'
 
@@ -40,10 +40,17 @@ const pullQuiet = async () => {
   if (!isConfigured(cfg)) return
   try {
     const r = await pullAll(cfg, snapshot())
-    if (!r) return
-    quietUntil = Date.now() + 800
-    if (r.changed && r.snapshot) applyRemote(r.snapshot)
-    syncTip.value = r.legacy ? '云端还是老的单文件格式，下次保存会按域拆开' : '已拉取云端'
+    if (r) {
+      quietUntil = Date.now() + 800
+      if (r.changed && r.snapshot) applyRemote(r.snapshot)
+      syncTip.value = r.legacy ? '云端还是老的单文件格式，下次保存会按域拆开' : '已拉取云端'
+    }
+    // 老格式的云端文件里带 updatedAt：趁这次开机把时间戳清掉，只做一次
+    if (needsRestamp()) {
+      quietUntil = Date.now() + 800
+      const p = await pushDirty(cfg, snapshot())
+      if (p.pushed.length) syncTip.value = `已清掉云端时间戳（${p.pushed.length} 个文件）`
+    }
   } catch (e) {
     syncTip.value = '拉取失败，检查同步配置'
   }

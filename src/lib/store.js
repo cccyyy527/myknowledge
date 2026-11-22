@@ -121,11 +121,11 @@ export function notesOfSubtree(topicId) {
 export const notesOfDomain = (domainId) =>
   state.notes.filter((n) => n.domainId === domainId).sort(byPinnedThenUpdated)
 
+// 云端不存 updatedAt，拉回本机时才会补上；万一还是缺，就退回 createdAt
+const stampOf = (n) => new Date(n.updatedAt || n.createdAt || 0).getTime() || 0
+
 function byPinnedThenUpdated(a, b) {
-  return (
-    Number(b.pinned) - Number(a.pinned) ||
-    new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  )
+  return Number(b.pinned) - Number(a.pinned) || stampOf(b) - stampOf(a)
 }
 
 const countType = (note, type) => note.blocks.filter((b) => b.type === type).length

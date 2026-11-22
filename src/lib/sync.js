@@ -20,14 +20,18 @@ const META_KEY = 'myknowledge.syncmeta'
 
 const bodyHash = (o) => hashStr(JSON.stringify(o))
 
-const emptyMeta = () => ({ sha: {}, key: {}, body: {} })
+// meta.v：本地这份指纹的「格式版本」。旧版把 updatedAt 一起算进正文，
+// 升到 v2 后云端文件里不再有时间戳 —— 用这个位标强制把老文件重写一遍（一次性）。
+const META_V = 2
+
+const emptyMeta = () => ({ v: 0, sha: {}, key: {}, body: {} })
 
 function readMeta() {
   try {
     const raw = localStorage.getItem(META_KEY)
     if (raw) {
       const m = JSON.parse(raw)
-      return { sha: m.sha || {}, key: m.key || {}, body: m.body || {} }
+      return { v: m.v || 0, sha: m.sha || {}, key: m.key || {}, body: m.body || {} }
     }
   } catch (e) {
     console.warn('同步元数据读取失败', e)
@@ -49,12 +53,26 @@ export function resetMeta() {
   } catch {}
 }
 
+// 这台机器同步过、但指纹还是「带 updatedAt」的旧格式 → 需要把云端文件重写一遍
+export function needsRestamp() {
+  const m = readMeta()
+  return m.v !== META_V && Object.keys(m.sha).length > 0
+}
+
 const normIndex = (d) => ({
   schema: SCHEMA,
   domains: d.domains || [],
   topics: d.topics || [],
   updatedAt: d.updatedAt || 0,
 })
+
+// 云端文件里刻意不存 updatedAt（不然每次同步都在 diff 里刷一行时间戳），
+// 拉回来时用本机同 id 笔记的时间补上；本机没有就拿 createdAt 兜底
+const withLocalTime = (notes, localById) =>
+  notes.map((n) => ({
+    ...n,
+    updatedAt: localById.get(n.id)?.updatedAt || n.createdAt || new Date().toISOString(),
+  }))
 
 /**
  * 拉取并就地合并。
@@ -66,6 +84,7 @@ export async function pullAll(cfg, localSnap, { ignoreLocal = false } = {}) {
   const meta = readMeta()
   const idx = await getFile(cfg, cfg.path)
   if (!idx) return null
+  const localById = new Map((localSnap?.notes || []).map((n) => [n.id, n]))
 
   // 老版本：kb.json 里装着全部笔记，一次性迁移过去
   if (isLegacy(idx.data)) {
@@ -74,11 +93,11 @@ export async function pullAll(cfg, localSnap, { ignoreLocal = false } = {}) {
       ? {
           domains: idx.data.domains || [],
           topics: idx.data.topics || [],
-          notes: idx.data.notes || [],
+          notes: withLocalTime(idx.data.notes || [], localById),
           updatedAt: idx.data.updatedAt || 0,
         }
       : localSnap
-    writeMeta({ sha: { [cfg.path]: idx.sha }, key: {}, body: {} })
+    writeMeta({ v: meta.v, sha: { [cfg.path]: idx.sha }, key: {}, body: {} })
     return { snapshot: snap, changed: remoteNewer, legacy: true }
   }
 
@@ -132,7 +151,7 @@ export async function pullAll(cfg, localSnap, { ignoreLocal = false } = {}) {
 
     const r = await getFile(cfg, path)
     if (!r || !Array.isArray(r.data?.notes)) continue
-    const rf = { schema: SCHEMA, domainId, notes: r.data.notes }
+    const rf = { schema: SCHEMA, domainId, notes: withLocalTime(r.data.notes, localById) }
     byDomain.set(domainId, rf.notes)
     meta.sha[path] = r.sha
     meta.key[path] = fileKey(rf)
@@ -178,10 +197,12 @@ export async function pushDirty(cfg, localSnap, { force = false } = {}) {
   const meta = readMeta()
   const { index, files } = splitSnapshot(localSnap)
   const pushed = []
+  // 指纹格式升级（旧版正文里带 updatedAt）：这一轮把所有文件重写一遍，去掉时间戳
+  const restamp = meta.v !== META_V
 
   const ik = indexKey(index)
   const ib = bodyHash(indexBody(index))
-  if (force || (meta.key[cfg.path] !== ik && meta.body[cfg.path] !== ib)) {
+  if (force || restamp || (meta.key[cfg.path] !== ik && meta.body[cfg.path] !== ib)) {
     const sha = await putSafe(cfg, cfg.path, '', indexBody(index), 'kb: 目录与分类')
     meta.sha[cfg.path] = sha
     meta.key[cfg.path] = ik
@@ -194,7 +215,8 @@ export async function pushDirty(cfg, localSnap, { force = false } = {}) {
     const path = notePathOf(cfg, f.domainId)
     const fb = bodyHash(fileBody(f))
     // 内容真的变了才提交：updatedAt / version 这类每次都变的字段不该在云端留空 commit
-    if (force || (!keyMatches(meta.key[path], f) && meta.body[path] !== fb)) need.push({ path, f, fb })
+    if (force || restamp || (!keyMatches(meta.key[path], f) && meta.body[path] !== fb))
+      need.push({ path, f, fb })
   }
 
   if (need.length) {
@@ -212,6 +234,7 @@ export async function pushDirty(cfg, localSnap, { force = false } = {}) {
     }
   }
 
+  meta.v = META_V
   writeMeta(meta)
   return { pushed }
 }

@@ -39,6 +39,7 @@ const add = () => {
 const nameOf = (topicId) => topicById(topicId)?.name || '未归类'
 
 const ago = (iso) => {
+  if (!iso) return ''
   const d = Math.round((Date.now() - new Date(iso).getTime()) / 86400000)
   if (d <= 0) return '今天'
   if (d === 1) return '昨天'
@@ -130,7 +131,7 @@ const ago = (iso) => {
           <span v-if="noteBadges(n).qa">问答 {{ noteBadges(n).qa }}</span>
           <span v-if="noteBadges(n).pitfalls">坑 {{ noteBadges(n).pitfalls }}</span>
           <span v-if="noteBadges(n).todos" class="warn">待补 {{ noteBadges(n).todos }}</span>
-          <span class="muted">{{ ago(n.updatedAt) }}</span>
+          <span v-if="ago(n.updatedAt)" class="muted">{{ ago(n.updatedAt) }}</span>
         </div>
       </RouterLink>
     </div>

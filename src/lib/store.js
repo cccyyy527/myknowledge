@@ -2,7 +2,7 @@ import { reactive, watch } from 'vue'
 import { DOMAINS, TOPICS, DEMO_NOTE } from './seed.js'
 
 // 原型阶段：全部数据放 localStorage，刷新不丢；清浏览器数据会丢
-const KEY = 'myknowledge.v1'
+const KEY = 'myknowledge.v2'
 
 const initial = () => ({
   domains: DOMAINS,

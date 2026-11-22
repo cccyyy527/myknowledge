@@ -46,6 +46,14 @@ const setTags = (v) => {
     .filter(Boolean)
 }
 
+const SECTION_HINTS = {
+  核心结论: '只放断言：一句能被追问「凭什么」的话，带关键数字。名词解释用概念卡，别拿定义当结论。',
+  '推导 / 细节': '支撑上面那句断言的东西：公式、成立的前提、无偏性、和替代方案比。',
+  高频问法: '面试官的原话 + 你的答法。别写「可能被问到…」，那不是问法。',
+  我踩过的坑: '你真答错过、做错过的事，加怎么改。没踩过就空着。',
+  待补: '还没查清的先占位，别硬凑结论。',
+}
+const hintOf = (sec) => (sec.heading ? SECTION_HINTS[sec.heading.block.text] || '' : '')
 const QUICK_TYPES = ['definition', 'formula', 'qa', 'pitfall', 'todo']
 const visibleBlocks = computed(() => {
   if (!note.value) return []
@@ -156,8 +164,8 @@ const del = () => {
 
     <template v-if="mode === 'edit'">
       <p class="ed-tip">
-        四段骨架不可改。新知识按<strong>形态</strong>加进对应分区：术语→概念、算式→公式、两者之差→对比、
-        面试官会问的→问答、自己错过的→坑。分区末尾的 + 决定它落在哪一段。
+        两条轴别混：<strong>段落是叙事位置</strong>（你在论证的哪一步），<strong>块是信息形态</strong>（这条知识长什么样）。
+        同一个概念卡，解释「是什么」就放核心结论段，支撑「凭什么」就放推导段。点分区末尾的 + 决定它落在哪一段。
       </p>
       <div class="blocks">
         <section v-for="(sec, si) in sections" :key="si" class="ed-section">
@@ -167,6 +175,7 @@ const del = () => {
             :deletable="false"
             @move="(d) => moveBlock(sec.heading.index, d)"
           />
+          <p v-if="hintOf(sec)" class="sec-hint">{{ hintOf(sec) }}</p>
           <BlockEdit
             v-for="it in sec.items"
             :key="it.block.id"

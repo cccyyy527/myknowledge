@@ -92,13 +92,20 @@ export const DEMO_NOTE = {
     {
       id: bid(),
       type: 'paragraph',
-      text: '用实验前就存在、且不受实验影响的协变量 X，把实验后指标 Y 里“本来就有的波动”扣掉。实验组和对照组之间的差异不变，噪声变小，等效于免费放大样本量。',
+      text: 'CUPED 不改你测到的效应，只降低你测不准的程度：拿实验前就已有的协变量 X，把 Y 里“分流前就存在的波动”扣掉，方差变成原来的 1 − ρ²，等效样本量放大 1/(1 − ρ²) 倍。ρ = 0.5 时省 25% 样本，且两组差异的估计依然无偏。',
+    },
+    {
+      id: bid(),
+      type: 'definition',
+      term: 'CUPED',
+      text: 'Controlled-experiment Using Pre-Experiment Data：用实验前数据构造协变量，对实验后指标做线性调整后再比较的方差缩减方法。',
+      detail: '本质是回归调整（regression adjustment）在 A/B 实验里的工程化叫法，2013 年由 Microsoft 提出。',
     },
     {
       id: bid(),
       type: 'callout',
       tone: 'tip',
-      text: '面试常被追问：到底降了多少方差？答 1 − ρ²。ρ 是 X 与 Y 的相关系数，ρ=0.5 时方差降 25%，等效样本量放大约 1.33 倍。',
+      text: '一句话版本：它不是让效应变大，是让噪声变小；所以它救的是“没显著”，不是“效应太小”。',
     },
 
     { id: bid(), type: 'heading', level: 2, text: '推导 / 细节' },

@@ -18,6 +18,7 @@ import {
 } from './lib/store.js'
 import { loadRemote, isConfigured, pull, push } from './lib/remote.js'
 import SyncDialog from './components/SyncDialog.vue'
+import AiPanel from './components/AiPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,6 +26,7 @@ const navOpen = ref(false)
 const q = ref('')
 const editMode = ref(false)
 const syncOpen = ref(false)
+const aiOpen = ref(false)
 const syncTip = ref('')
 const open = reactive({ d4: true })
 const treeOpen = reactive({ 't-variance': true })
@@ -118,12 +120,14 @@ const delDomain = (d) => {
       <RouterLink to="/agg/qa">问答</RouterLink>
       <RouterLink to="/agg/pitfalls">坑</RouterLink>
     </nav>
+    <button class="sync-btn" title="AI 整理" @click="aiOpen = true">✨</button>
     <button class="sync-btn" :title="syncTip || '云同步设置'" @click="syncOpen = true">
       ☁<span v-if="syncTip" class="sync-dot"></span>
     </button>
   </header>
 
   <SyncDialog :open="syncOpen" @close="syncOpen = false" @synced="pullQuiet" />
+  <AiPanel :open="aiOpen" @close="aiOpen = false" />
 
   <div class="shell">
     <aside class="side" :class="{ open: navOpen, editing: editMode }">

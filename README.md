@@ -38,6 +38,20 @@ npm run dev      # http://localhost:5174
 - 启动时若云端 `updatedAt` 更新则覆盖本地；编辑后 2s 防抖上传，每次上传是一个 commit（等于版本历史）
 - 手机和电脑同时改，后保存的覆盖前者
 
+## AI 助手（可选）
+
+顶栏 ✨ 打开，两处用法：
+
+- **收进来**：贴一段零散笔记 → AI 挑分类、切成知识块、按「核心结论 / 推导 / 高频问法 / 我踩过的坑 / 待补」归位 → 先看预览，确认后才写入新笔记
+- **单块改写**：编辑模式下每个块右上角 ✨ → 润色 / 扩写 / 拆成知识块 / 造高频问法 / 造踩坑卡 → 先看预览，点「采用」才替换
+
+配置：面板里「设置」填 Base URL、模型、API Key。
+
+- 默认 DeepSeek：`https://api.deepseek.com` + `deepseek-chat`
+- 任何 OpenAI 兼容接口都能用（把 Base URL 换成对应地址、模型名换成对应模型）
+- Key 只存本机 `localStorage`，直连服务商，不经过任何第三方；换设备要重填
+- 拿 Key：<https://platform.deepseek.com/api_keys>
+
 ## 部署
 
 推 `main` 触发 `.github/workflows/deploy.yml`：构建后把 `dist/` 强制推到 `gh-pages` 分支
@@ -63,8 +77,11 @@ src/
   lib/seed.js      # 10 域、三级分类、示例笔记
   lib/store.js     # 内存状态 + localStorage 持久化 + 统计/搜索/聚合 + 目录增删改
   lib/remote.js    # GitHub Contents API：拉取 / 上传 kb.json
+  lib/ai.js        # AI：提示词 / 块归一化 / 自动落位 / 单块改写
   components/BlockView.vue   # 块 → 知识卡渲染
   components/BlockEdit.vue   # 块 → 编辑控件（公式带实时预览）
   components/SyncDialog.vue  # 云同步配置面板
+  components/AiPanel.vue     # AI 面板（收进来 / 设置）
+  components/AiBlockDialog.vue # AI 单块改写弹窗
   pages/           # 首页 / 域 / 分类（可含下级）/ 笔记 / 聚合 / 搜索
 ```

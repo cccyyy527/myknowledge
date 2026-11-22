@@ -7,7 +7,7 @@ const props = defineProps({
   index: { type: Number, default: 0 },
   deletable: { type: Boolean, default: true },
 })
-const emit = defineEmits(['remove', 'move'])
+const emit = defineEmits(['remove', 'move', 'ai'])
 
 const preview = computed(() => {
   if (props.block.type !== 'formula' || !props.block.latex) return ''
@@ -39,6 +39,9 @@ const LABELS = {
     <div class="ed-label">
       <span>{{ LABELS[block.type] || block.type }}</span>
       <span class="ed-actions">
+        <button v-if="block.type !== 'heading'" class="ed-ai" title="用 AI 改写这一块" @click="emit('ai')">
+          ✨
+        </button>
         <button title="上移" @click="emit('move', -1)">↑</button>
         <button title="下移" @click="emit('move', 1)">↓</button>
         <button v-if="deletable" title="删除" @click="emit('remove')">×</button>

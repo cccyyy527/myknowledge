@@ -13,6 +13,7 @@ import {
 } from '../lib/store.js'
 import BlockView from '../components/BlockView.vue'
 import BlockEdit from '../components/BlockEdit.vue'
+import AiBlockDialog from '../components/AiBlockDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -115,6 +116,51 @@ const moveBlock = (i, delta) => {
 
 const removeBlock = (i) => note.value.blocks.splice(i, 1)
 
+/* ---------- AI 改写单块 ---------- */
+const aiTarget = ref(null) // { index, block, sectionTitle }
+
+const sectionTitleOf = (index) => {
+  const blocks = note.value?.blocks || []
+  for (let i = index; i >= 0; i--) {
+    if (blocks[i].type === 'heading' && blocks[i].level === 2) return blocks[i].text
+  }
+  return ''
+}
+
+const openAi = (index) => {
+  const b = note.value.blocks[index]
+  aiTarget.value = { index, block: b, sectionTitle: sectionTitleOf(index) }
+}
+
+// 插到某个段落的末尾；没有这一段就在文末新起一段
+const insertIntoSection = (title, blocks) => {
+  const arr = note.value.blocks
+  let at = arr.length
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i].type === 'heading' && arr[i].level === 2 && arr[i].text === title) {
+      at = i + 1
+      for (let j = i + 1; j < arr.length; j++) {
+        if (arr[j].type === 'heading' && arr[j].level === 2) break
+        at = j + 1
+      }
+      arr.splice(at, 0, ...blocks)
+      return
+    }
+  }
+  arr.push({ id: newBlockId(), type: 'heading', level: 2, text: title }, ...blocks)
+}
+
+const applyAi = ({ action, blocks }) => {
+  if (!aiTarget.value) return
+  const clean = blocks.map((b) => {
+    const { section, ...rest } = b
+    return rest
+  })
+  if (action.mode === 'insert') insertIntoSection(action.target, clean)
+  else note.value.blocks.splice(aiTarget.value.index, 1, ...clean)
+  aiTarget.value = null
+}
+
 const del = () => {
   if (!confirm('删除这篇笔记？原型阶段无法恢复。')) return
   const t = note.value.topicId
@@ -187,6 +233,7 @@ const del = () => {
             :block="it.block"
             @remove="removeBlock(it.index)"
             @move="(d) => moveBlock(it.index, d)"
+            @ai="openAi(it.index)"
           />
           <div class="adder">
             <span class="adder-label">在此段加</span>
@@ -204,6 +251,15 @@ const del = () => {
         这篇还没有概念 / 公式 / 问答 / 坑卡片。
       </p>
     </article>
+
+    <AiBlockDialog
+      :open="!!aiTarget"
+      :block="aiTarget?.block"
+      :note="note"
+      :section-title="aiTarget?.sectionTitle || ''"
+      @close="aiTarget = null"
+      @apply="applyAi"
+    />
   </section>
   <p v-else class="page">找不到这篇笔记</p>
 </template>

@@ -27,23 +27,59 @@ const domain = computed(() => (topic.value ? domainById(topic.value.domainId) : 
 
 const mode = ref(localStorage.getItem('myknowledge.mode') || 'read')
 
-/* ---------- 切换模式后回到页面顶端 ----------
-   编辑态和阅读态排版高度不一样，硬记像素会错位，索性统一回顶部；
-   双击进编辑 / 新增小节这类自己会定位的入口除外。 */
-let keepScroll = false
+/* ---------- 切换模式时怎么处理滚动位置 ----------
+   顶部 tab 切：按用户要求回页面顶端（两种模式排版高度差近一倍，硬记像素必然错位）。
+   右下角浮动按钮切：原地不动 —— 按「当前看着的那一块」记位置，切完把同一块对回屏幕原位。
+   双击进编辑 / 新增小节 / 识图落块这类自己会定位的入口：都不动。 */
+let skipAnchor = false // 入口自己会定位
+let holdPos = false // 保住当前位置
+
+// 记「视口顶端那块」的 id 和块内相对位置（0 = 块顶贴顶，1 = 块底贴顶）
+const grabPos = () => {
+  const els = [...document.querySelectorAll('[data-bid]')]
+  for (const el of els) {
+    const r = el.getBoundingClientRect()
+    if (r.bottom > 0 && r.height > 0) {
+      const ratio = Math.min(1, Math.max(0, -r.top / r.height))
+      return { id: el.dataset.bid, ratio, y: r.top + ratio * r.height }
+    }
+  }
+  return null
+}
+
+const restorePos = (p) => {
+  const el = p ? document.querySelector(`[data-bid="${p.id}"]`) : null
+  if (!el) return window.scrollTo(0, 0)
+  const r = el.getBoundingClientRect()
+  window.scrollBy(0, r.top + p.ratio * r.height - p.y)
+}
 
 watch(mode, (m) => {
   localStorage.setItem('myknowledge.mode', m)
-  if (keepScroll) {
-    keepScroll = false
-    return
-  }
-  nextTick(() => window.scrollTo(0, 0))
+  const skip = skipAnchor
+  const hold = holdPos
+  skipAnchor = false
+  holdPos = false
+  if (skip) return
+  if (!hold) return nextTick(() => window.scrollTo(0, 0))
+  const p = grabPos() // 此时 DOM 还没换，拿到的还是旧排版
+  nextTick(() => restorePos(p))
 })
+
+const fabToggle = () => {
+  holdPos = true
+  mode.value = mode.value === 'edit' ? 'read' : 'edit'
+}
 
 const savedAt = ref('')
 const saving = ref(false)
 let timer = null
+
+/* ---------- 滚下去以后不用再滑回顶部切模式 ---------- */
+const fabOn = ref(false)
+const syncFab = () => {
+  fabOn.value = window.scrollY > 240
+}
 // 老数据可能没有 tags 字段，编辑态要往里 push，先补齐
 watch(
   note,
@@ -166,6 +202,31 @@ const moveBlock = (i, delta) => {
 
 const removeBlock = (i) => note.value.blocks.splice(i, 1)
 
+/* ---------- 在任意两块之间插内容（两节之间就是从下一节标题前面插） ---------- */
+// 点某块的「＋」，先记下插入点，再在面板里选要插什么
+const insertAt = ref(null)
+
+const openInsert = (index) => {
+  insertAt.value = index
+}
+
+const insertBlockBefore = (type) => {
+  const def = ADD.find((a) => a[0] === type)
+  if (!def || !note.value || insertAt.value === null) return
+  const b = { id: newBlockId(), type, ...structuredClone(def[2]) }
+  note.value.blocks.splice(insertAt.value, 0, b)
+  insertAt.value = null
+  nextTick(() => focusBlock(b.id))
+}
+
+const insertSectionBefore = () => {
+  if (!note.value || insertAt.value === null) return
+  const b = { id: newBlockId(), type: 'heading', level: 2, text: '' }
+  note.value.blocks.splice(insertAt.value, 0, b)
+  insertAt.value = null
+  nextTick(() => focusBlock(b.id))
+}
+
 /* ---------- 小节：增 / 删 / 整节上下移 ---------- */
 // 触屏没有双击：给每块挂一个点得到的 ✎
 const isTouch = ref(false)
@@ -190,7 +251,7 @@ const addSection = (afterSec = null) => {
   if (!note.value) return
   const b = { id: newBlockId(), type: 'heading', level: 2, text: '' }
   note.value.blocks.splice(afterSec ? sectionEndAt(afterSec) : note.value.blocks.length, 0, b)
-  keepScroll = mode.value !== 'edit' // 这个入口自己会把新小节滚到眼前，别又拉回顶端
+  skipAnchor = mode.value !== 'edit' // 这个入口自己会把新小节滚到眼前，别又拉回顶端
   mode.value = 'edit'
   nextTick(() => focusBlock(b.id))
 }
@@ -218,7 +279,7 @@ const moveSection = (sec, delta) => {
 
 /* ---------- 阅读 / 速查态双击直接改这一块 ---------- */
 const editAt = (blockId) => {
-  if (mode.value !== 'edit') keepScroll = true // focusBlock 自己会定位到这一块
+  if (mode.value !== 'edit') skipAnchor = true // focusBlock 自己会定位到这一块
   mode.value = 'edit'
   nextTick(() => focusBlock(blockId))
 }
@@ -276,7 +337,7 @@ const ocrWhere = computed(() => {
 const applyOcr = (patch) => {
   if (!patch) return
   spliceAtSectionEnd(ocrSec.value, patch)
-  if (mode.value !== 'edit') keepScroll = true // 刚插进来的块在中间，别跳到顶端
+  if (mode.value !== 'edit') skipAnchor = true // 刚插进来的块在中间，别跳到顶端
   mode.value = 'edit'
 }
 
@@ -297,12 +358,15 @@ const onPaste = (e) => {
 
 onMounted(() => {
   window.addEventListener('paste', onPaste)
+  window.addEventListener('scroll', syncFab, { passive: true })
+  syncFab()
   touchMq = window.matchMedia('(hover: none), (pointer: coarse)')
   syncTouch()
   touchMq.addEventListener?.('change', syncTouch)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('paste', onPaste)
+  window.removeEventListener('scroll', syncFab)
   touchMq?.removeEventListener?.('change', syncTouch)
 })
 
@@ -358,7 +422,6 @@ const del = () => {
     <p class="note-meta">
       <span v-if="saving" class="warn">正在保存…</span>
       <span v-else-if="savedAt">已保存 {{ savedAt }}</span>
-      <span>v{{ note.version }}</span>
       <span v-if="noteBadges(note).qa" class="chip">问答 {{ noteBadges(note).qa }}</span>
       <span v-if="noteBadges(note).pitfalls" class="chip">坑 {{ noteBadges(note).pitfalls }}</span>
       <span v-if="noteBadges(note).todos" class="chip warn">待补 {{ noteBadges(note).todos }}</span>
@@ -394,6 +457,7 @@ const del = () => {
             :block="sec.heading.block"
             @remove="removeSection(sec)"
             @move="(d) => moveSection(sec, d)"
+            @insert-before="openInsert(sec.heading.index)"
           />
           <p v-if="hintOf(sec)" class="sec-hint">{{ hintOf(sec) }}</p>
           <BlockEdit
@@ -404,6 +468,7 @@ const del = () => {
             @move="(d) => moveBlock(it.index, d)"
             @ai="openAi(it.index)"
             @insert="insertAfter(it.index, $event)"
+            @insert-before="openInsert(it.index)"
           />
           <div class="adder">
             <span class="adder-label">在此段加</span>
@@ -421,7 +486,9 @@ const del = () => {
 
         <div class="ed-section-add">
           <button class="chip-btn" @click="addSection(null)">+ 在文末新起一节</button>
-          <span class="muted">小节就是二级标题；不想要的节点标题那行的 × 删掉</span>
+          <span class="muted">
+            小节就是二级标题；不想要的节点标题那行的 × 删掉。要在两块之间插，点那块标题行上的 ＋
+          </span>
         </div>
       </div>
     </template>
@@ -450,6 +517,31 @@ const del = () => {
         这篇还没有概念 / 公式 / 问答 / 坑卡片。
       </p>
     </article>
+
+    <button
+      v-if="fabOn"
+      class="mode-fab"
+      :title="mode === 'edit' ? '切回阅读（停在这一块）' : '切到编辑（停在这一块）'"
+      @click="fabToggle"
+    >
+      {{ mode === 'edit' ? '👁 阅读' : '✎ 编辑' }}
+    </button>
+
+    <div v-if="insertAt !== null" class="ins-mask" @click.self="insertAt = null">
+      <div class="ins-box">
+        <div class="ins-head">
+          <strong>插在这里</strong>
+          <span class="muted">第 {{ insertAt + 1 }} 块前面</span>
+          <button class="btn-ghost" @click="insertAt = null">×</button>
+        </div>
+        <div class="ins-grid">
+          <button v-for="a in ADD" :key="a[0]" class="chip-btn" @click="insertBlockBefore(a[0])">
+            + {{ a[1] }}
+          </button>
+          <button class="chip-btn" @click="insertSectionBefore">⁝ 新小节</button>
+        </div>
+      </div>
+    </div>
 
     <AiBlockDialog
       :open="!!aiTarget"

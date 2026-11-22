@@ -167,7 +167,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .chip-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- note ---------- */
-.note-page { max-width: 800px; }
+.note-page { max-width: 800px; padding-bottom: 76px; }
 .note-head { display: flex; align-items: flex-start; gap: 14px; justify-content: space-between; flex-wrap: wrap; }
 .note-title-inp {
   font: 600 24px/1.3 var(--sans); color: var(--ink); border: 0; border-bottom: 1px solid var(--line);
@@ -744,4 +744,62 @@ code { font-family: var(--mono); font-size: 0.9em; }
   .ask-thread { max-height: 40vh; }
   .ask-bar { flex-direction: column; gap: 0; }
   .ask-strict { margin: 0 0 10px; }
+}
+
+/* ---------- 右下角浮动切模式 ---------- */
+.mode-fab {
+  position: fixed;
+  right: 22px;
+  bottom: 24px;
+  z-index: 14;
+  font: 500 13px/1 var(--sans);
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+}
+.mode-fab:hover { filter: brightness(1.06); }
+.mode-fab:active { transform: translateY(1px); }
+
+/* ---------- 两块之间插入 ---------- */
+.ins-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(28, 26, 23, 0.34);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 70;
+}
+.ins-box {
+  width: 100%;
+  max-width: 460px;
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+}
+.ins-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.ins-head .muted { font-size: 12px; flex: 1; }
+.ins-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 860px) {
+  .mode-fab { right: 14px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .ins-mask { padding: 0; align-items: flex-end; }
+  .ins-box { max-width: none; border-radius: 14px 14px 0 0; padding: 14px 14px calc(18px + env(safe-area-inset-bottom, 0px)); }
+  .ins-grid .chip-btn { padding: 8px 12px; }
 }

@@ -303,8 +303,8 @@ export function insertBlocks(note, sectionTitle, blocks) {
 }
 
 export function touchNote(note) {
+  // 只动 updatedAt：version 既不展示也不参与云端指纹，不再自增
   note.updatedAt = new Date().toISOString()
-  note.version = (note.version || 1) + 1
 }
 
 export function removeNote(id) {

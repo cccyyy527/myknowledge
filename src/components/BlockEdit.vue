@@ -8,7 +8,7 @@ const props = defineProps({
   index: { type: Number, default: 0 },
   deletable: { type: Boolean, default: true },
 })
-const emit = defineEmits(['remove', 'move', 'ai', 'insert'])
+const emit = defineEmits(['remove', 'move', 'ai', 'insert', 'insertBefore'])
 
 const preview = computed(() => {
   if (props.block.type !== 'formula' || !props.block.latex) return ''
@@ -56,6 +56,7 @@ const LABELS = {
     <div class="ed-label">
       <span>{{ LABELS[block.type] || block.type }}</span>
       <span class="ed-actions">
+        <button title="在这一块前面插一块 / 一节" @click="emit('insertBefore')">＋</button>
         <button v-if="block.type !== 'heading'" class="ed-ai" title="用 AI 改写这一块" @click="emit('ai')">
           ✨
         </button>

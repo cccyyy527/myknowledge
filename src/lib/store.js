@@ -276,6 +276,28 @@ function templateBlocks() {
 
 export const newBlockId = () => 'b-' + Math.random().toString(36).slice(2, 10)
 
+// 把若干块塞到某个段落末尾；没有这一段就在文末新起一段
+export function insertBlocks(note, sectionTitle, blocks) {
+  if (!note || !blocks || !blocks.length) return
+  const arr = note.blocks
+  const hit = arr.findIndex(
+    (b) => b.type === 'heading' && b.level === 2 && b.text === sectionTitle,
+  )
+  if (hit < 0) {
+    arr.push(
+      { id: newBlockId(), type: 'heading', level: 2, text: sectionTitle },
+      ...blocks,
+    )
+    return
+  }
+  let end = hit + 1
+  for (let j = hit + 1; j < arr.length; j++) {
+    if (arr[j].type === 'heading' && arr[j].level === 2) break
+    end = j + 1
+  }
+  arr.splice(end, 0, ...blocks)
+}
+
 export function touchNote(note) {
   note.updatedAt = new Date().toISOString()
   note.version = (note.version || 1) + 1

@@ -81,17 +81,23 @@ const save = () => {
   c.base = c.base.trim()
   c.model = c.model.trim()
   c.key = c.key.trim()
+  const v = { ...(c.vision || {}) }
+  v.base = String(v.base || '').trim()
+  v.model = String(v.model || '').trim()
+  v.key = String(v.key || '').trim()
+  c.vision = v
   cfg.value = c
   saveAI(c)
   say(isAiReady(c) ? '已保存' : '已保存，但还缺 API Key', !isAiReady(c))
 }
 
-const doPing = async () => {
-  busy.value = 'ping'
+const doPing = async (which = 'text') => {
+  busy.value = which === 'vision' ? 'pvision' : 'ping'
   say('')
   try {
-    const r = await ping(cfg.value)
-    say(`连通正常，模型回了：${r.slice(0, 20)}`)
+    const target = which === 'vision' ? cfg.value.vision : cfg.value
+    const r = await ping(target)
+    say(`${which === 'vision' ? '视觉模型' : '连通'}正常，回了：${r.slice(0, 20)}`)
   } catch (e) {
     say(String(e.message || e), true)
   } finally {
@@ -205,11 +211,38 @@ const forget = () => {
 
         <div class="ai-acts">
           <button class="ai-primary" @click="save">保存</button>
-          <button :disabled="!!busy" @click="doPing">{{ busy === 'ping' ? '测试中…' : '测试连接' }}</button>
+          <button :disabled="!!busy" @click="doPing('text')">
+            {{ busy === 'ping' ? '测试中…' : '测试连接' }}
+          </button>
           <button class="danger" @click="forget">清除 Key</button>
         </div>
 
         <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
+
+        <p class="ai-sub">视觉模型（识图用，可选）</p>
+        <p class="ai-hint">
+          DeepSeek 看不了图。想把截图里的公式变成块，单独配一个能看图的模型：智谱
+          <code>glm-4v-flash</code> 免费，填 <code>https://open.bigmodel.cn/api/paas/v4</code> 就行。
+          没配也不影响其他功能，图片块照样能放。
+        </p>
+        <label class="ai-row">
+          <span>接口地址</span>
+          <input v-model.trim="cfg.vision.base" placeholder="https://open.bigmodel.cn/api/paas/v4" />
+        </label>
+        <label class="ai-row">
+          <span>模型</span>
+          <input v-model.trim="cfg.vision.model" placeholder="glm-4v-flash" />
+        </label>
+        <label class="ai-row">
+          <span>API Key</span>
+          <input v-model.trim="cfg.vision.key" type="password" placeholder="智谱的 key" />
+        </label>
+        <p class="ai-hint">视觉模型这套配置和上面分开存，换文本模型不会把它清掉。</p>
+        <div class="ai-acts">
+          <button :disabled="!!busy" @click="doPing('vision')">
+            {{ busy === 'pvision' ? '测试中…' : '测试视觉模型' }}
+          </button>
+        </div>
       </template>
     </div>
   </div>

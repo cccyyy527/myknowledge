@@ -10,10 +10,12 @@ import {
   removeNote,
   newBlockId,
   noteBadges,
+  insertBlocks,
 } from '../lib/store.js'
 import BlockView from '../components/BlockView.vue'
 import BlockEdit from '../components/BlockEdit.vue'
 import AiBlockDialog from '../components/AiBlockDialog.vue'
+import AiNoteDialog from '../components/AiNoteDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -119,6 +121,7 @@ const removeBlock = (i) => note.value.blocks.splice(i, 1)
 
 /* ---------- AI 改写单块 ---------- */
 const aiTarget = ref(null) // { index, block, sectionTitle }
+const wholeAi = ref(false)
 
 const sectionTitleOf = (index) => {
   const blocks = note.value?.blocks || []
@@ -134,21 +137,12 @@ const openAi = (index) => {
 }
 
 // 插到某个段落的末尾；没有这一段就在文末新起一段
-const insertIntoSection = (title, blocks) => {
-  const arr = note.value.blocks
-  let at = arr.length
-  for (let i = 0; i < arr.length; i++) {
-    if (arr[i].type === 'heading' && arr[i].level === 2 && arr[i].text === title) {
-      at = i + 1
-      for (let j = i + 1; j < arr.length; j++) {
-        if (arr[j].type === 'heading' && arr[j].level === 2) break
-        at = j + 1
-      }
-      arr.splice(at, 0, ...blocks)
-      return
-    }
-  }
-  arr.push({ id: newBlockId(), type: 'heading', level: 2, text: title }, ...blocks)
+const insertIntoSection = (title, blocks) => insertBlocks(note.value, title, blocks)
+
+// 识图结果落在当前块下一格
+const insertAfter = (index, patch) => {
+  if (!note.value || !patch) return
+  note.value.blocks.splice(index + 1, 0, { id: newBlockId(), ...patch })
 }
 
 const applyAi = ({ action, blocks }) => {
@@ -190,6 +184,9 @@ const del = () => {
           <button :class="{ on: mode === 'edit' }" @click="mode = 'edit'">编辑</button>
           <button :class="{ on: mode === 'quick' }" @click="mode = 'quick'">速查</button>
         </div>
+        <button class="btn-ghost" title="让 AI 重排整篇" @click="wholeAi = true">
+          ✨ 整篇助手
+        </button>
         <button class="btn-ghost danger" @click="del">删除</button>
       </div>
     </div>
@@ -235,6 +232,7 @@ const del = () => {
             @remove="removeBlock(it.index)"
             @move="(d) => moveBlock(it.index, d)"
             @ai="openAi(it.index)"
+            @insert="insertAfter(it.index, $event)"
           />
           <div class="adder">
             <span class="adder-label">在此段加</span>
@@ -260,6 +258,13 @@ const del = () => {
       :section-title="aiTarget?.sectionTitle || ''"
       @close="aiTarget = null"
       @apply="applyAi"
+    />
+
+    <AiNoteDialog
+      :open="wholeAi"
+      :note="note"
+      @close="wholeAi = false"
+      @applied="mode = 'edit'"
     />
   </section>
   <p v-else class="page">找不到这篇笔记</p>

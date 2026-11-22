@@ -1,6 +1,6 @@
 // AI 接入：OpenAI 兼容的 /chat/completions
 // key 只存本机 localStorage，和云同步 token 同一套信任模型
-import { state } from './store.js'
+import { state, newBlockId } from './store.js'
 import { buildContext } from './retrieve.js'
 
 const CFG_KEY = 'myknowledge.ai'
@@ -11,18 +11,35 @@ export const DEFAULT_AI = {
   key: '',
 }
 
+// 识图要单独的模型：DeepSeek 没有视觉，随便配一个能看图的就行
+export const DEFAULT_VISION = {
+  base: 'https://open.bigmodel.cn/api/paas/v4',
+  model: 'glm-4v-flash',
+  key: '',
+}
+
 export function loadAI() {
   try {
     const raw = localStorage.getItem(CFG_KEY)
-    if (raw) return { ...DEFAULT_AI, ...JSON.parse(raw) }
+    if (raw) {
+      const j = JSON.parse(raw) || {}
+      return { ...DEFAULT_AI, ...j, vision: { ...DEFAULT_VISION, ...(j.vision || {}) } }
+    }
   } catch (e) {
     console.warn('AI 配置读取失败', e)
   }
-  return { ...DEFAULT_AI }
+  return { ...DEFAULT_AI, vision: { ...DEFAULT_VISION } }
 }
 
 export const saveAI = (cfg) => localStorage.setItem(CFG_KEY, JSON.stringify(cfg))
-export const clearAI = () => localStorage.removeItem(CFG_KEY)
+
+// 只清文本模型的 key，视觉模型那套留着
+export function clearAI() {
+  const v = loadAI().vision
+  if (v && v.key) localStorage.setItem(CFG_KEY, JSON.stringify({ vision: v }))
+  else localStorage.removeItem(CFG_KEY)
+}
+
 export const isAiReady = (c) => Boolean(c && c.base && c.model && c.key)
 
 const endpoint = (base) => {
@@ -463,4 +480,213 @@ export async function askLibrary({
     signal,
   })
   return { text, used, fallback, strict }
+}
+
+/* ---------- 识图：截图 → LaTeX / 文字 ---------- */
+
+// 图片先缩到长边 1600 再转 base64：请求体不至于几十 MB，慢网也能发出去
+export async function imageToDataUrl(source, { maxSide = 1600, quality = 0.85 } = {}) {
+  let blob = source
+  if (typeof source === 'string') {
+    const res = await fetch(source)
+    if (!res.ok) throw new Error(`图片读不到（HTTP ${res.status}）`)
+    blob = await res.blob()
+  }
+  if (!blob || !String(blob.type || '').startsWith('image/')) throw new Error('这不是图片')
+
+  const url = URL.createObjectURL(blob)
+  try {
+    const img = await new Promise((ok, no) => {
+      const i = new Image()
+      i.onload = () => ok(i)
+      i.onerror = () => no(new Error('图片解码失败'))
+      i.src = url
+    })
+    const scale = Math.min(1, maxSide / Math.max(img.width || 1, img.height || 1))
+    const w = Math.max(1, Math.round(img.width * scale))
+    const h = Math.max(1, Math.round(img.height * scale))
+    const cv = document.createElement('canvas')
+    cv.width = w
+    cv.height = h
+    cv.getContext('2d').drawImage(img, 0, 0, w, h)
+    return cv.toDataURL('image/jpeg', quality)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+const OCR_SYSTEM = `你帮人把图里的内容抄成能编辑的东西，图多半是统计 / 机器学习公式的截图。
+只输出一个 JSON 对象，不要解释、不要 Markdown 代码围栏：
+- 图里是公式：{"kind":"formula","latex":"...","text":"一句话说这是什么"}
+- 图里是文字 / 表格 / 代码：{"kind":"text","text":"按原样抄，保留换行"}
+
+latex 用单反斜杠，不要用 $ 包裹，不要 \\begin{equation} 这类环境。
+看不清的地方宁可写 \\text{?}，也不许猜一个看起来合理的式子。`
+
+export async function ocrImage({ src, cfg } = {}) {
+  const c = cfg || loadAI()
+  const v = c.vision || DEFAULT_VISION
+  if (!isAiReady(v))
+    throw new Error('还没配视觉模型，去「设置 → 视觉模型」加一个能看图的（智谱 glm-4v-flash 免费）')
+
+  const dataUrl = await imageToDataUrl(src)
+  const text = await chat(
+    [
+      { role: 'system', content: OCR_SYSTEM },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '把这张图转成 JSON。' },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+    { cfg: v, temperature: 0.1, maxTokens: 1200 },
+  )
+  const data = pickJson(text)
+  return {
+    kind: data.kind === 'text' ? 'text' : 'formula',
+    latex: str(data.latex),
+    text: str(data.text),
+  }
+}
+
+/* ---------- 整篇改写：把笔记当一份稿子重排 ---------- */
+
+// 块属于哪一段：靠前面的 heading 推
+export function sectioned(note) {
+  const out = []
+  let cur = SECTIONS[0].id
+  for (const b of note?.blocks || []) {
+    if (b.type === 'heading' && b.level === 2) {
+      const hit = SECTIONS.find((s) => s.title === b.text)
+      if (hit) cur = hit.id
+      continue
+    }
+    out.push({ section: cur, block: b })
+  }
+  return out
+}
+
+const sectionsOf = (note) => new Map(sectioned(note).map((r) => [r.block.id, r.section]))
+
+const REVISE_SYSTEM = `你在改一篇数据分析面试知识笔记的结构。用户会给你现有内容和想要的改动。
+
+${BLOCK_SPEC}
+${SECTION_SPEC}
+
+规则：
+- 按最终顺序列出所有块，每个块带一个 op：
+  keep    原样保留，只需给 id
+  replace 改写已有块，给 id + block（新内容，type 可以换）
+  add     新增块，给 section + block
+  drop    删掉已有块，只需给 id
+- block 里放块字段（type + BLOCK_SPEC 里对应的字段），section 放在 op 这一层。
+- 指令没提到的块一律 keep，不要顺手润色、不要改变顺序。
+- 不要编造具体数字、论文名、公司案例；缺信息就写 todo 块占位。
+- 不要输出 heading 块，段落由 section 字段决定。
+- title 只在指令明确要求改标题时才给，否则省略这个字段。
+只输出一个 JSON 对象：{"title":"...","ops":[{"op":"keep","id":"..."},{"op":"add","section":"core","block":{"type":"paragraph","text":"..."}}]}`
+
+export async function reviseNote({ note, instruction, cfg } = {}) {
+  const cur = sectioned(note).map((r) => ({ ...r.block, section: r.section }))
+  const user = `笔记标题：${note?.title || ''}
+
+现有块（id 要原样引用）：
+${JSON.stringify(cur)}
+
+想要的改动：${instruction}`
+
+  const text = await chat(
+    [
+      { role: 'system', content: REVISE_SYSTEM },
+      { role: 'user', content: user },
+    ],
+    { cfg, temperature: 0.3, maxTokens: 4000 },
+  )
+  const data = pickJson(text)
+  return {
+    title: str(data.title),
+    ops: normalizeOps(data.ops || data.blocks, note),
+  }
+}
+
+// 模型可能给不存在的 id、把 add 当 replace、重复同一个块，这里全部掰正
+export function normalizeOps(raw, note) {
+  const all = new Map(sectioned(note).map((r) => [r.block.id, r.block]))
+  const seen = new Set()
+  const out = []
+  for (const item of arr(raw)) {
+    if (!item || typeof item !== 'object') continue
+    const id = str(item.id)
+    let op = ['keep', 'replace', 'add', 'drop'].includes(item.op) ? item.op : ''
+    if (!op) op = id && all.has(id) ? 'replace' : 'add'
+
+    if (op === 'keep' || op === 'drop') {
+      if (!all.has(id) || seen.has(id)) continue
+      seen.add(id)
+      out.push({ op, id, block: all.get(id) })
+      continue
+    }
+    if (op === 'replace') {
+      if (!all.has(id) || seen.has(id)) op = 'add'
+      else seen.add(id)
+    }
+    // 块内容模型有时放在 block 里、有时直接平铺在这一层
+    const inner = item.block && typeof item.block === 'object' ? item.block : item
+    const section = str(item.section) || str(inner.section)
+    const [b] = normalizeBlocks([{ ...inner, section }])
+    if (!b) continue
+    const { id: _tmp, ...rest } = b
+    if (op === 'replace') out.push({ op, id, section: b.section, block: rest, old: all.get(id) })
+    else out.push({ op: 'add', section: b.section, block: rest })
+  }
+  return out
+}
+
+// 空段落不留在笔记里：heading 后面没块就别显示
+const compact = (list) => {
+  const out = []
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i]
+    const next = list[i + 1]
+    if (b.type === 'heading' && b.level === 2 && (!next || next.type === 'heading')) continue
+    out.push(b)
+  }
+  return out
+}
+
+// 按用户勾过的行改写笔记；heading 由 assembleBlocks 重新生成
+export function applyOps(note, rows) {
+  if (!note) return
+  const secOf = sectionsOf(note)
+  const byId = new Map(sectioned(note).map((r) => [r.block.id, r.block]))
+  const items = []
+  const done = new Set()
+  const push = (section, block) => items.push({ ...block, section: section || 'core' })
+
+  for (const r of rows) {
+    if (r.op === 'keep') {
+      const b = byId.get(r.id)
+      if (b && !done.has(r.id)) {
+        done.add(r.id)
+        push(secOf.get(r.id), b)
+      }
+    } else if (r.op === 'replace') {
+      if (done.has(r.id)) continue
+      done.add(r.id)
+      if (r.checked) push(r.section, { ...r.block, id: r.id })
+      else push(secOf.get(r.id), byId.get(r.id))
+    } else if (r.op === 'add') {
+      if (r.checked) push(r.section, { ...r.block, id: newBlockId() })
+    } else if (r.op === 'drop') {
+      if (r.checked) done.add(r.id)
+    }
+  }
+  // 模型漏掉的原块按原样留住，别悄悄吃掉用户写的东西
+  for (const [id, b] of byId) {
+    if (done.has(id)) continue
+    push(secOf.get(id), b)
+  }
+  note.blocks = compact(assembleBlocks(items))
 }

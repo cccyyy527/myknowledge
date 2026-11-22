@@ -1,9 +1,17 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary, OUTSIDE_MARK } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, OUTSIDE_MARK, SECTIONS } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
-import { state, createNote, newBlockId, flattenTopics, topicPath } from '../lib/store.js'
+import {
+  state,
+  createNote,
+  newBlockId,
+  flattenTopics,
+  topicPath,
+  insertBlocks,
+  touchNote,
+} from '../lib/store.js'
 import BlockView from './BlockView.vue'
 
 const emit = defineEmits(['close', 'setup'])
@@ -137,13 +145,23 @@ const splitOutside = (text) => {
 
 /* ---------- 把一条回答存成笔记 ---------- */
 
-const saving = ref(null) // { idx, topicId, outside }
+const saving = ref(null) // { idx, mode:'new'|'exist', topicId, noteId, section, outside }
 
 const groups = computed(() =>
   state.domains.map((d) => ({ domain: d, rows: flattenTopics(d.id, true) })),
 )
 
+// 写进已有笔记时按标题选，顺序和笔记里的段落一致
 const savingTurn = computed(() => (saving.value ? turns.value[saving.value.idx] : null))
+
+// 只列有笔记的分类，空的太多了没法选
+const noteOptions = computed(() =>
+  state.notes.map((n) => ({
+    id: n.id,
+    title: n.title,
+    path: topicPath(n.topicId).map((t) => t.name).join(' / '),
+  })),
+)
 
 // 预览用的块：问答卡留住问题和答法，[n] 的出处附在后面才查得到
 const savingBlocks = computed(() => {
@@ -176,20 +194,40 @@ const openSave = (idx) => {
   const anyTopic = flattenTopics(state.domains[0]?.id, true)[0]?.topic?.id || ''
   saving.value = {
     idx,
+    mode: 'new',
     topicId: srcNote?.topicId || anyTopic,
+    noteId: srcNote?.id || state.notes[0]?.id || '',
+    section: 'qa',
     outside: false,
   }
 }
 
 const doSave = () => {
   const t = savingTurn.value
-  if (!t || !saving.value?.topicId) return
-  const note = createNote(saving.value.topicId)
-  note.title = t.q.length > 38 ? t.q.slice(0, 38) + '…' : t.q
-  note.blocks = savingBlocks.value.map((b) => {
+  const s = saving.value
+  if (!t || !s) return
+
+  const clean = savingBlocks.value.map((b) => {
     const { id, ...rest } = b
     return { id: newBlockId(), ...rest }
   })
+
+  if (s.mode === 'exist') {
+    const note = state.notes.find((n) => n.id === s.noteId)
+    if (!note) return
+    const sec = SECTIONS.find((x) => x.id === s.section) || SECTIONS[0]
+    insertBlocks(note, sec.title, clean)
+    touchNote(note)
+    saving.value = null
+    emit('close')
+    router.push(`/n/${note.id}`)
+    return
+  }
+
+  if (!s.topicId) return
+  const note = createNote(s.topicId)
+  note.title = t.q.length > 38 ? t.q.slice(0, 38) + '…' : t.q
+  note.blocks = clean
   saving.value = null
   emit('close')
   router.push(`/n/${note.id}`)
@@ -243,20 +281,57 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
 
               <div v-else class="ask-save-box">
                 <div class="ask-save-head">
-                  <span>存成新笔记</span>
+                  <span>存成笔记</span>
                   <button class="ask-save-x" title="取消" @click="saving = null">×</button>
                 </div>
-                <label class="ai-pick">
-                  <span>落到</span>
-                  <select v-model="saving.topicId">
-                    <optgroup v-for="g in groups" :key="g.domain.id" :label="g.domain.name">
-                      <option v-for="r in g.rows" :key="r.topic.id" :value="r.topic.id">
-                        {{ '　'.repeat(r.depth) }}{{ r.topic.name }}
+
+                <div class="ask-save-mode">
+                  <button :class="{ on: saving.mode === 'new' }" @click="saving.mode = 'new'">
+                    新建一篇
+                  </button>
+                  <button
+                    :class="{ on: saving.mode === 'exist' }"
+                    :disabled="!noteOptions.length"
+                    @click="saving.mode = 'exist'"
+                  >
+                    写进已有笔记
+                  </button>
+                </div>
+
+                <template v-if="saving.mode === 'new'">
+                  <label class="ai-pick">
+                    <span>落到</span>
+                    <select v-model="saving.topicId">
+                      <optgroup v-for="g in groups" :key="g.domain.id" :label="g.domain.name">
+                        <option v-for="r in g.rows" :key="r.topic.id" :value="r.topic.id">
+                          {{ '　'.repeat(r.depth) }}{{ r.topic.name }}
+                        </option>
+                      </optgroup>
+                    </select>
+                  </label>
+                  <p class="ask-save-path">{{ pathOf(saving.topicId) }}</p>
+                </template>
+
+                <template v-else>
+                  <label class="ai-pick">
+                    <span>写进</span>
+                    <select v-model="saving.noteId">
+                      <option v-for="o in noteOptions" :key="o.id" :value="o.id">
+                        {{ o.title }}（{{ o.path }}）
                       </option>
-                    </optgroup>
-                  </select>
-                </label>
-                <p class="ask-save-path">{{ pathOf(saving.topicId) }}</p>
+                    </select>
+                  </label>
+                  <label class="ai-pick">
+                    <span>加到这段</span>
+                    <select v-model="saving.section">
+                      <option v-for="s in SECTIONS" :key="s.id" :value="s.id">{{ s.title }}</option>
+                    </select>
+                  </label>
+                  <p class="ask-save-path">
+                    会拼到「{{ (SECTIONS.find((s) => s.id === saving.section) || SECTIONS[0]).title }}」这一段末尾
+                  </p>
+                </template>
+
                 <label v-if="splitOutside(t.a).outside" class="ask-save-out">
                   <input type="checkbox" v-model="saving.outside" />
                   <span>也带上「库外」那段（AI 外推的，会标成待核对）</span>
@@ -265,7 +340,9 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   <BlockView v-for="b in savingBlocks" :key="b.id" :block="b" expand />
                 </div>
                 <div class="ai-acts">
-                  <button class="ai-primary" @click="doSave">写入新笔记</button>
+                  <button class="ai-primary" @click="doSave">
+                    {{ saving.mode === 'exist' ? '写进这篇' : '写入新笔记' }}
+                  </button>
                   <button @click="saving = null">取消</button>
                 </div>
               </div>

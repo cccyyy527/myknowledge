@@ -29,9 +29,20 @@ npm run dev      # http://localhost:5174
 
 局限：清站点数据即丢、手机和电脑不同步、没有历史版本、没有账号。
 
-正式版（下一步）：Hono API + SQLite(本地) / D1(线上)，`notes.blocks_json` 存块，
-派生表 `note_blocks` 驱动聚合页，FTS5(trigram) 做中文搜索，每日导出 JSON 备份。
-届时前端只把 `store.js` 换成走 API 的适配层，页面与块渲染不用动。
+## 云同步（可选）
+
+顶栏 ☁ 按钮里填 GitHub 私有仓库 + fine-grained token，即可多端同步：
+
+- 数据落在 `owner/repo/branch/path` 指定的单个 `kb.json`（默认 `myknowledge-data` / `main` / `kb.json`）
+- token 只要有该仓库的 **Contents: Read and write**，只存本机 localStorage，不经过任何第三方
+- 启动时若云端 `updatedAt` 更新则覆盖本地；编辑后 2s 防抖上传，每次上传是一个 commit（等于版本历史）
+- 手机和电脑同时改，后保存的覆盖前者
+
+## 部署
+
+推 `main` 触发 `.github/workflows/deploy.yml`，构建并发布到
+`https://cccyyy527.github.io/myknowledge/`。注意 GitHub Pages 在 **Free 账号下只支持公开仓库**，
+所以本仓库需要设为 public，笔记内容不在这里（在私有数据仓库或本机浏览器）。
 
 ## 结构
 
@@ -39,7 +50,9 @@ npm run dev      # http://localhost:5174
 src/
   lib/seed.js      # 10 域、三级分类、示例笔记
   lib/store.js     # 内存状态 + localStorage 持久化 + 统计/搜索/聚合 + 目录增删改
+  lib/remote.js    # GitHub Contents API：拉取 / 上传 kb.json
   components/BlockView.vue   # 块 → 知识卡渲染
   components/BlockEdit.vue   # 块 → 编辑控件（公式带实时预览）
+  components/SyncDialog.vue  # 云同步配置面板
   pages/           # 首页 / 域 / 分类（可含下级）/ 笔记 / 聚合 / 搜索
 ```

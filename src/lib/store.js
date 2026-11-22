@@ -3,6 +3,8 @@ import { DOMAINS, TOPICS, DEMO_NOTE } from './seed.js'
 
 // 原型阶段：全部数据放 localStorage，刷新不丢；清浏览器数据会丢
 const KEY = 'myknowledge.v3'
+// 最后修改时间单独存：放进 state 会让 deep watch 自触发成死循环
+const TS_KEY = 'myknowledge.updatedAt'
 
 const initial = () => ({
   domains: DOMAINS,
@@ -25,20 +27,39 @@ function load() {
 
 export const state = reactive(load())
 
+let updatedAt = Number(localStorage.getItem(TS_KEY)) || 0
+export const lastUpdated = () => updatedAt
+
+// 深拷贝快照：上传远端 / 导出 JSON 都走这里
+export const snapshot = () => ({
+  domains: JSON.parse(JSON.stringify(state.domains)),
+  topics: JSON.parse(JSON.stringify(state.topics)),
+  notes: JSON.parse(JSON.stringify(state.notes)),
+  updatedAt,
+})
+
 watch(
   state,
   () => {
+    updatedAt = Date.now()
     try {
-      localStorage.setItem(
-        KEY,
-        JSON.stringify({ domains: state.domains, topics: state.topics, notes: state.notes }),
-      )
+      localStorage.setItem(KEY, JSON.stringify(snapshot()))
+      localStorage.setItem(TS_KEY, String(updatedAt))
     } catch (e) {
       console.warn('本地数据写入失败', e)
     }
   },
   { deep: true },
 )
+
+// 用远端数据整体替换本地（拉取后调用）
+export function applyRemote(data) {
+  state.domains = data.domains || []
+  state.topics = data.topics || []
+  state.notes = data.notes || []
+  updatedAt = data.updatedAt || Date.now()
+  localStorage.setItem(TS_KEY, String(updatedAt))
+}
 
 export const topicById = (id) => state.topics.find((t) => t.id === id)
 export const domainById = (id) => state.domains.find((d) => d.id === id)

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   state,
@@ -12,15 +12,65 @@ import {
   renameTopic,
   removeTopic,
   removeDomain,
+  snapshot,
+  applyRemote,
+  lastUpdated,
 } from './lib/store.js'
+import { loadRemote, isConfigured, pull, push } from './lib/remote.js'
+import SyncDialog from './components/SyncDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const navOpen = ref(false)
 const q = ref('')
 const editMode = ref(false)
+const syncOpen = ref(false)
+const syncTip = ref('')
 const open = reactive({ d4: true })
 const treeOpen = reactive({ 't-variance': true })
+
+let timer = null
+let quietUntil = 0
+
+// 启动时：云端更新过就覆盖本地
+const pullQuiet = async () => {
+  const cfg = loadRemote()
+  if (!isConfigured(cfg)) return
+  try {
+    const r = await pull(cfg)
+    if (!r || !r.data) return
+    if ((r.data.updatedAt || 0) > lastUpdated()) {
+      quietUntil = Date.now() + 800
+      applyRemote(r.data)
+      syncTip.value = '已拉取云端'
+    }
+  } catch (e) {
+    syncTip.value = '拉取失败，检查同步配置'
+  }
+}
+
+onMounted(pullQuiet)
+
+// 每次改动防抖上传
+watch(
+  state,
+  () => {
+    if (Date.now() < quietUntil) return
+    const cfg = loadRemote()
+    if (!isConfigured(cfg)) return
+    clearTimeout(timer)
+    timer = setTimeout(async () => {
+      try {
+        const r = await pull(cfg)
+        await push(cfg, snapshot(), r?.sha)
+        syncTip.value = '已上传'
+      } catch (e) {
+        syncTip.value = '上传失败：' + (e.message || e)
+      }
+    }, 2000)
+  },
+  { deep: true },
+)
 
 watch(
   () => route.fullPath,
@@ -68,7 +118,12 @@ const delDomain = (d) => {
       <RouterLink to="/agg/qa">问答</RouterLink>
       <RouterLink to="/agg/pitfalls">坑</RouterLink>
     </nav>
+    <button class="sync-btn" :title="syncTip || '云同步设置'" @click="syncOpen = true">
+      ☁<span v-if="syncTip" class="sync-dot"></span>
+    </button>
   </header>
+
+  <SyncDialog :open="syncOpen" @close="syncOpen = false" @synced="pullQuiet" />
 
   <div class="shell">
     <aside class="side" :class="{ open: navOpen, editing: editMode }">

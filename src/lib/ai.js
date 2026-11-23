@@ -229,14 +229,8 @@ const arr = (v) => (Array.isArray(v) ? v : [])
 export const OUTSIDE_MARK = '【库外】'
 const MARK_RE = /【\s*库外(?:补充)?\s*】/g
 
-// 渲染用：把标记抹掉
+// 写进笔记、渲染之前都把标记抹掉，内容整段保留 —— 落盘时不再区分「库内 / 库外」
 export const stripMark = (v) => str(v).replace(MARK_RE, '').trim()
-// 落盘用：标记之后是库外内容，截断不要
-const cutMark = (v) => {
-  const t = str(v)
-  const i = t.search(MARK_RE)
-  return (i < 0 ? t : t.slice(0, i)).trim()
-}
 
 const VALID = new Set([
   'paragraph',
@@ -262,33 +256,33 @@ export function normalizeBlocks(list) {
     const type = VALID.has(raw.type) ? raw.type : 'paragraph'
     const section = SECTIONS.some((s) => s.id === raw.section) ? raw.section : 'core'
     const b = { id: bid(), type, section }
-    if (type === 'paragraph') b.text = cutMark(raw.text)
+    if (type === 'paragraph') b.text = stripMark(raw.text)
     else if (type === 'definition') {
-      b.term = cutMark(raw.term)
-      b.text = cutMark(raw.text)
-      b.detail = cutMark(raw.detail)
+      b.term = stripMark(raw.term)
+      b.text = stripMark(raw.text)
+      b.detail = stripMark(raw.detail)
     } else if (type === 'formula') {
       b.latex = str(raw.latex)
-      b.text = cutMark(raw.text)
+      b.text = stripMark(raw.text)
     } else if (type === 'comparison') {
-      b.left = cutMark(raw.left)
-      b.right = cutMark(raw.right)
-      b.rows = arr(raw.rows).map((r) => ({ k: str(r?.k), a: cutMark(r?.a), b: cutMark(r?.b) }))
+      b.left = stripMark(raw.left)
+      b.right = stripMark(raw.right)
+      b.rows = arr(raw.rows).map((r) => ({ k: str(r?.k), a: stripMark(r?.a), b: stripMark(r?.b) }))
     } else if (type === 'qa') {
-      b.question = cutMark(raw.question)
-      b.answer = cutMark(raw.answer)
+      b.question = stripMark(raw.question)
+      b.answer = stripMark(raw.answer)
     } else if (type === 'pitfall') {
-      b.text = cutMark(raw.text)
-      b.cause = cutMark(raw.cause)
-      b.avoid = cutMark(raw.avoid)
+      b.text = stripMark(raw.text)
+      b.cause = stripMark(raw.cause)
+      b.avoid = stripMark(raw.avoid)
     } else if (type === 'steps' || type === 'bulletList') {
-      b.text = cutMark(raw.text)
-      b.items = arr(raw.items).map(cutMark).filter(Boolean)
+      b.text = stripMark(raw.text)
+      b.items = arr(raw.items).map(stripMark).filter(Boolean)
       if (!b.items.length) b.items = ['']
     } else if (type === 'callout') {
       b.tone = raw.tone === 'warn' ? 'warn' : 'tip'
-      b.text = cutMark(raw.text)
-    } else b.text = cutMark(raw.text)
+      b.text = stripMark(raw.text)
+    } else b.text = stripMark(raw.text)
 
     const blank =
       type === 'qa'
@@ -319,7 +313,7 @@ function blockFromPatch(raw, old, isNew) {
   if (type === 'image' || type === 'divider') return null
   const id = isNew ? bid() : old.id
   if (type === 'heading') {
-    const text = cutMark(raw.text)
+    const text = stripMark(raw.text)
     return text ? { id, type, level: old.level === 3 ? 3 : 2, text } : null
   }
   const section = SECTIONS.some((s) => s.id === raw.section)
@@ -468,15 +462,25 @@ const ACTION_PROMPT = {
     '根据这个块的内容，生成 1-2 条真实容易踩的坑：现象 / 原因 / 怎么避免，type 用 pitfall，section 用 pitfall。要具体，不要泛泛而谈。',
 }
 
-export async function rewriteBlock({ action, block, note, sectionTitle, cfg }) {
-  const spec = ACTION_PROMPT[action]
+// 自由提问 / 自由要求：模型自己判断是「回答后补块」还是「直接改这一块」
+const CUSTOM_SPEC = (ask) => `用户对这个块说的话：${ask}
+
+按他这句话处理这个块：
+- 如果是在提问（问机制、问区别、问「面试官追问怎么答」）：正面回答，再把回答整理成知识块 —— 结论和机制用 paragraph，问法与答法用 qa，易错点用 pitfall，对比用 comparison。这种情况原块不动，mode 用 insert。
+- 如果是在要求改写（写短点、加推导、换个说法、补对比）：按他要求的范围重写原块，mode 用 replace。
+- 不要编造具体数字、论文名、公司案例；拿不准的数字用「通常 / 一般」这种说法，或者用 todo 块占位。
+只输出一个 JSON 对象：{"mode":"insert|replace","blocks":[{"type":"...","section":"...",...}]}`
+
+export async function rewriteBlock({ action, ask = '', block, note, sectionTitle, cfg }) {
+  const custom = String(ask || '').trim()
+  const spec = custom ? CUSTOM_SPEC(custom) : ACTION_PROMPT[action]
   if (!spec) throw new Error('未知的 AI 动作')
-  const system = `你在改写一篇数据分析面试知识笔记里的一个块。
+  const mode = custom ? 'insert' : AI_ACTIONS.find((a) => a.id === action)?.mode || 'replace'
+  const system = `你在改一篇数据分析面试知识笔记里的一个块。用户可能让你润色、扩写、拆块，也可能直接问你关于这个块的问题；你产出的内容会写进这篇笔记。
 ${BLOCK_SPEC}
 ${SECTION_SPEC}
 
-${spec}
-只输出一个 JSON 对象：{"blocks":[{"type":"...","section":"...",...}]}`
+${spec}`
 
   const user = `${noteContext(note, sectionTitle, block)}
 当前块：[${block.type}] ${blockText(block)}`
@@ -486,12 +490,13 @@ ${spec}
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { cfg, temperature: 0.4, maxTokens: 2500 },
+    { cfg, temperature: custom ? 0.3 : 0.4, maxTokens: 2500 },
   )
   const data = pickJson(text)
   const blocks = normalizeBlocks(data.blocks)
   if (!blocks.length) throw new Error('模型没给出可用内容，换个说法再试')
-  return blocks
+  // 提问是补内容，别把原块冲掉；除非模型明确说这次是改写
+  return { blocks, mode: custom ? (data.mode === 'replace' ? 'replace' : 'insert') : mode }
 }
 
 /* ---------- L2.5：一次问答 → 归档判断（新建 / 追加 + 分块） ---------- */
@@ -516,6 +521,15 @@ function noteDigest(note) {
   const lead = blocks.filter((b) => b.type !== 'heading').map(blockText).find(Boolean) || ''
   return { heads, lead: lead.slice(0, 70) }
 }
+
+// 新建还是追加，唯一判据是「已有那篇的标题还概括得了这次内容吗」。
+// 默认偏向新建：库里两篇标题略有重叠，比一篇什么都塞的大杂烩好收拾。
+const FILE_RULE = `新建一篇，还是追加进已有的某一篇 —— 只按一条判据决定：那篇笔记的标题，换成这次的内容还成立吗？
+- 成立（标题就是这个主题，或者那篇里的空小节 / 待补项正好是为这次的内容留的）→ 追加（exist / edit）。
+- 不成立（只是同一个大领域，把这次的标题换上去就不对了）→ 新建（new）。例：已有《CUPED 方差缩减》，这次讲的是「序贯检验的做法」，就该新建，不要塞进 CUPED 当一节。
+- 这次内容本身能独立成篇、面试时会被单独拎出来问 → 新建，别硬塞进相邻那篇当个小节。
+- 别为了「避免重复」把不同主题硬合并；也别因为搜到一篇同名空骨架就放弃新建 —— 空骨架只有在标题确实对得上时才填。
+- 拿不准就新建。`
 
 export async function fileAnswer({ question, answer, used = [], cfg } = {}) {
   const notes = state.notes
@@ -550,7 +564,8 @@ export async function fileAnswer({ question, answer, used = [], cfg } = {}) {
 
   const system = `你是数据分析面试知识库的归档助手。用户刚问了一个问题并拿到了回答，现在要把这次问答存进知识库。
 你要同时决定两件事：
-1. 该新建一篇笔记，还是追加进已有的某一篇。已有笔记讲的就是同一个主题就必须追加，别造重复笔记；主题确实不同才新建。
+1. 该新建一篇笔记，还是追加进已有的某一篇。
+${FILE_RULE}
 2. 把回答重排成结构化知识块，按语义放对段落 —— 不要偷懒把整条答案原样塞进一张问答卡。
 ${BLOCK_SPEC}
 ${SECTION_SPEC}
@@ -558,7 +573,8 @@ ${SECTION_SPEC}
 额外要求：
 - 回答里的 [1] [2] 这类引用编号原样保留，不要改号、不要新增；让它们落在 paragraph 的 text 或 qa 的 answer 里。
 - 除了「面试官会怎么问」那种一句话提问，其余内容都拆成 paragraph / definition / formula / bulletList / steps / comparison。
-- 只写回答里真有的信息，别补数字、论文名、案例；缺信息用 todo 占位。
+- 回答里如果分成「引笔记」和「模型自己知道的知识」两段，两段都要收进来，按内容顺成一篇；不要标注哪句来自库外，不要留「${OUTSIDE_MARK}」这类标记。
+- 可以收录回答里确实成立的通用知识，但别编造具体数字、论文名、案例；缺信息用 todo 占位。
 - target 为 exist 时，noteId 必须原样复制笔记列表里出现过的 id，段落优先沿用那篇笔记已有的段落标题。
 - target 为 new 时，topicId 必须原样复制分类树里出现过的 id；title 要短，不带书名号。
 - reason 用一句话说明为什么这么归类，会展示给用户看。
@@ -764,7 +780,7 @@ export const TOOLS = [
             type: 'string',
             enum: ['new', 'exist', 'edit'],
             description:
-              'new 新建一篇；exist 往已有笔记对应小节末尾追加新块；edit 改已有笔记里具体的块（改写 / 删除 / 就地插入）',
+              'new 新建一篇（已有笔记的标题概括不了这次内容时用它）；exist 往已有笔记对应小节末尾追加新块；edit 改已有笔记里具体的块（改写 / 删除 / 就地插入）',
           },
           noteId: {
             type: 'string',
@@ -1094,14 +1110,16 @@ export function askAgent({ question, history = [], cfg, strict = false, ...rest 
 }
 
 const ARCHIVE_NUDGE = `把上面这轮问答存进知识库：
-- 先 search_notes 查有没有同主题的笔记。空骨架的也算同主题，内容直接填进那篇，不要另建重复的。
-- 需要的话 read_note 看它已有的小节和块 id。
+- 先 search_notes 查有没有同主题的笔记，再决定是新建还是追加。
+${FILE_RULE}
+- 追加进已有笔记时，需要的话 read_note 看它已有的小节和块 id。
 - 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason，以及 blocks 或 edits。
 - 这轮回答如果是在纠正、补充、更新已有块里的说法，用 mode=edit：edits 里逐条写 op（replace 整块改写 / remove 删除 / insert 在目标块后就地插一块），blockId 取自 read_note 的 [#块id]，块内容要给全。
 - 纯粹是新内容才用 mode=exist 往小节末尾追加 blocks。
 - blocks 要按语义分块（paragraph / definition / formula / qa / pitfall / steps / comparison），别把整篇答案塞进一张问答卡。
 - 回答里的 [1] [2] 这些编号原样保留。
-- blocks / edits 里只写库内已有的内容：不要出现「${OUTSIDE_MARK}」这类标记，也不要写别的方括号标签或前缀；没有笔记依据的通用知识、通用数字一律不要写进去。
+- 上面这轮回答如果你分成了「引笔记」和「自己的知识」两段，两段都要收进来：按内容顺成一篇，不要标注哪句来自库外，也不要写「${OUTSIDE_MARK}」这类标记或别的方括号标签、前缀。
+- 笔记里没有、但确实成立的通用知识可以写进来，写清楚成立条件和结论就行；但不要编造具体数字、论文名、公司案例。拿不准的数字用「通常 / 一般」这种不定量说法，或者干脆不写。
 - 内容牵涉库里别的笔记时，写 [[那篇的完整标题]]，标题必须和工具返回的一字不差；不确定就不写。
 - 这里的回答是给归档器看的，不用长篇解释；提案提交完说一句归档到哪了就停。`
 

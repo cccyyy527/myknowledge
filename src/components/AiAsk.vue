@@ -324,8 +324,6 @@ const noteOptions = computed(() =>
   })),
 )
 
-const OUTSIDE_HEAD = 'AI 补充（待核对）'
-
 // 改已有块时预览头里要显示改的是哪一篇
 const editingNote = computed(() =>
   saving.value ? state.notes.find((n) => n.id === saving.value.noteId) : null,
@@ -337,7 +335,7 @@ const blankTitle = (q) => (q.length > 38 ? q.slice(0, 38) + '…' : q)
 const plainBlocks = computed(() => {
   const t = savingTurn.value
   if (!t) return []
-  const { inside } = splitOutside(t.a)
+  const inside = stripMark(t.a)
   const src = t.used.length
     ? '\n\n来源：' + t.used.map((s, i) => `[${i + 1}] ${s.title}`).join('　')
     : ''
@@ -357,37 +355,12 @@ const attachRefs = (blocks, refs) => {
   })
 }
 
-// 勾了「也带上 AI 补充」时追加的块，统一挂到「AI 补充（待核对）」小节下面
-const outsideBlocks = computed(() => {
-  const t = savingTurn.value
-  if (!t || !saving.value?.outside) return []
-  const { outside } = splitOutside(t.a)
-  if (!outside) return []
-  const out = [
-    {
-      id: 'pv-warn',
-      type: 'callout',
-      tone: 'warn',
-      text: '下面这段是 AI 的外部知识，不是你笔记里的内容，存进来后自己核一遍再当结论用。',
-    },
-  ]
-  let i = 0
-  for (const para of outside.split(/\n{2,}/)) {
-    const text = para.trim()
-    if (text) out.push({ id: `pv-p${i++}`, type: 'paragraph', text })
-  }
-  return out
-})
-
 // 预览：有 AI 分块就按段落排，没有就退回一张问答卡
 const savingBlocks = computed(() => {
   const s = saving.value
   if (!s) return []
   const refs = (savingTurn.value?.used || []).map((x) => ({ id: x.id, title: x.title }))
-  const body = s.blocks?.length ? groupBySection(attachRefs(s.blocks, refs)) : plainBlocks.value
-  return outsideBlocks.value.length
-    ? [...body, { id: 'pv-oh', type: 'heading', level: 2, text: OUTSIDE_HEAD }, ...outsideBlocks.value]
-    : body
+  return s.blocks?.length ? groupBySection(attachRefs(s.blocks, refs)) : plainBlocks.value
 })
 
 // 预览里的引用 chip：开新标签看原文，别把面板连同草稿一起关掉
@@ -440,7 +413,7 @@ const analyze = async (idx) => {
     if (!r) {
       r = await fileAnswer({
         question: t.q,
-        answer: splitOutside(t.a).inside,
+        answer: stripMark(t.a),
         used: t.used,
         cfg: loadAI(),
       })
@@ -482,7 +455,6 @@ const openSave = (idx) => {
     topicId: srcNote?.topicId || anyTopic,
     noteId: srcNote?.id || state.notes[0]?.id || '',
     section: 'qa',
-    outside: false,
     title: blankTitle(t.q),
     blocks: null,
     edits: [],
@@ -515,13 +487,11 @@ const doSave = () => {
       }
       return { id: newBlockId(), ...rest }
     })
-  const tail = clean(outsideBlocks.value)
 
   if (s.mode === 'edit') {
     const note = state.notes.find((n) => n.id === s.noteId)
     if (!note || !s.plan?.length) return
     note.blocks = s.plan
-    if (tail.length) insertBlocks(note, OUTSIDE_HEAD, tail)
     touchNote(note)
     saving.value = null
     emit('close')
@@ -542,7 +512,6 @@ const doSave = () => {
       const sec = SECTIONS.find((x) => x.id === s.section) || SECTIONS[0]
       insertBlocks(note, sec.title, clean(body))
     }
-    if (tail.length) insertBlocks(note, OUTSIDE_HEAD, tail)
     touchNote(note)
     saving.value = null
     emit('close')
@@ -554,7 +523,6 @@ const doSave = () => {
   const note = createNote(s.topicId)
   note.title = (s.title || '').trim() || blankTitle(t.q)
   note.blocks = clean(ai ? assembleBlocks(ai) : body)
-  if (tail.length) insertBlocks(note, OUTSIDE_HEAD, tail)
   saving.value = null
   emit('close')
   router.push(`/n/${note.id}`)
@@ -717,10 +685,6 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   <p v-else class="ask-save-path">每块按内容自己找段落，插到对应小节末尾</p>
                 </template>
 
-                <label v-if="splitOutside(t.a).outside" class="ask-save-out">
-                  <input type="checkbox" v-model="saving.outside" />
-                  <span>也带上「AI 补充」那段（不是你笔记里的内容，会标成待核对）</span>
-                </label>
                 <div v-if="saving.mode !== 'edit'" class="ai-preview ask-save-pv">
                   <BlockView
                     v-for="b in savingBlocks"

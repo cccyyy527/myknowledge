@@ -17,6 +17,7 @@ const msg = ref('')
 const bad = ref(false)
 const draft = ref(null)
 const lastAction = ref('')
+const ask = ref('')
 
 const say = (t, isBad = false) => {
   msg.value = t
@@ -30,6 +31,7 @@ watch(
     cfg.value = loadAI()
     draft.value = null
     lastAction.value = ''
+    ask.value = ''
     say('')
     if (!isAiReady(cfg.value)) say('还没配 API Key，先在顶栏 ✨ → 设置 里填一下', true)
   },
@@ -44,14 +46,39 @@ const run = async (action) => {
   draft.value = null
   lastAction.value = action.id
   try {
-    const blocks = await rewriteBlock({
+    const r = await rewriteBlock({
       action: action.id,
       block: props.block,
       note: props.note,
       sectionTitle: props.sectionTitle,
       cfg: cfg.value,
     })
-    draft.value = { action, blocks }
+    draft.value = { action, mode: r.mode, blocks: r.blocks }
+  } catch (e) {
+    say(String(e.message || e), true)
+  } finally {
+    busy.value = ''
+  }
+}
+
+// 直接问这个块：模型自己判断是「回答后补块」还是「按你的要求改这一块」
+const runAsk = async () => {
+  const q = ask.value.trim()
+  if (!q || !props.block) return
+  busy.value = 'ask'
+  say('')
+  draft.value = null
+  lastAction.value = 'ask'
+  try {
+    const r = await rewriteBlock({
+      action: 'ask',
+      ask: q,
+      block: props.block,
+      note: props.note,
+      sectionTitle: props.sectionTitle,
+      cfg: cfg.value,
+    })
+    draft.value = { action: { id: 'ask', label: '提问', target: '' }, mode: r.mode, blocks: r.blocks }
   } catch (e) {
     say(String(e.message || e), true)
   } finally {
@@ -61,7 +88,7 @@ const run = async (action) => {
 
 const apply = () => {
   if (!draft.value) return
-  emit('apply', { action: draft.value.action, blocks: draft.value.blocks })
+  emit('apply', { action: { ...draft.value.action, mode: draft.value.mode }, blocks: draft.value.blocks })
   emit('close')
 }
 </script>
@@ -92,14 +119,26 @@ const apply = () => {
         </button>
       </div>
 
+      <div class="ai-ask">
+        <textarea
+          v-model="ask"
+          rows="2"
+          :disabled="!!busy || !ready"
+          placeholder="也可以直接问这一块，或提要求：为什么除的是 n-1 / 写短点 / 补个和 CUPED 的对比"
+          @keydown.ctrl.enter.prevent="runAsk"
+        ></textarea>
+        <button :disabled="!!busy || !ready || !ask.trim()" @click="runAsk">
+          {{ busy === 'ask' ? '思考中…' : '提问 / 照做' }}
+        </button>
+      </div>
+
       <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
 
       <template v-if="draft">
         <p class="ai-hint">
-          预览（{{ draft.blocks.length }} 块）→ 点「采用」才会写进笔记
-          <template v-if="draft.action.mode === 'insert'">
-            ，会插到「{{ draft.action.target }}」这一段
-          </template>
+          预览（{{ draft.blocks.length }} 块）→ 点「采用」才会写进笔记，
+          <template v-if="draft.mode === 'insert'">会插到这一块后面</template>
+          <template v-else>会替换现在这一块</template>
         </p>
         <div class="ai-preview">
           <BlockView v-for="b in draft.blocks" :key="b.id" :block="b" />

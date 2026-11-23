@@ -404,7 +404,8 @@ const applyAi = ({ action, blocks }) => {
     const { section, ...rest } = b
     return rest
   })
-  if (action.mode === 'insert') insertIntoSection(action.target, clean)
+  if (action.mode === 'insert' && action.target) insertIntoSection(action.target, clean)
+  else if (action.mode === 'insert') note.value.blocks.splice(aiTarget.value.index + 1, 0, ...clean)
   else note.value.blocks.splice(aiTarget.value.index, 1, ...clean)
   aiTarget.value = null
 }

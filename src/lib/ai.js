@@ -221,6 +221,20 @@ const SECTION_SPEC = `
 const str = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v))
 const arr = (v) => (Array.isArray(v) ? v : [])
 
+// 回答里用这一行切开「引你自己的笔记」和「模型自己的知识」。
+// 只给程序认，正文渲染和写进笔记之前都要削掉，用户永远看不到这几个字。
+export const OUTSIDE_MARK = '【库外】'
+const MARK_RE = /【\s*库外(?:补充)?\s*】/g
+
+// 渲染用：把标记抹掉
+export const stripMark = (v) => str(v).replace(MARK_RE, '').trim()
+// 落盘用：标记之后是库外内容，截断不要
+const cutMark = (v) => {
+  const t = str(v)
+  const i = t.search(MARK_RE)
+  return (i < 0 ? t : t.slice(0, i)).trim()
+}
+
 const VALID = new Set([
   'paragraph',
   'definition',
@@ -245,33 +259,33 @@ export function normalizeBlocks(list) {
     const type = VALID.has(raw.type) ? raw.type : 'paragraph'
     const section = SECTIONS.some((s) => s.id === raw.section) ? raw.section : 'core'
     const b = { id: bid(), type, section }
-    if (type === 'paragraph') b.text = str(raw.text)
+    if (type === 'paragraph') b.text = cutMark(raw.text)
     else if (type === 'definition') {
-      b.term = str(raw.term)
-      b.text = str(raw.text)
-      b.detail = str(raw.detail)
+      b.term = cutMark(raw.term)
+      b.text = cutMark(raw.text)
+      b.detail = cutMark(raw.detail)
     } else if (type === 'formula') {
       b.latex = str(raw.latex)
-      b.text = str(raw.text)
+      b.text = cutMark(raw.text)
     } else if (type === 'comparison') {
-      b.left = str(raw.left)
-      b.right = str(raw.right)
-      b.rows = arr(raw.rows).map((r) => ({ k: str(r?.k), a: str(r?.a), b: str(r?.b) }))
+      b.left = cutMark(raw.left)
+      b.right = cutMark(raw.right)
+      b.rows = arr(raw.rows).map((r) => ({ k: str(r?.k), a: cutMark(r?.a), b: cutMark(r?.b) }))
     } else if (type === 'qa') {
-      b.question = str(raw.question)
-      b.answer = str(raw.answer)
+      b.question = cutMark(raw.question)
+      b.answer = cutMark(raw.answer)
     } else if (type === 'pitfall') {
-      b.text = str(raw.text)
-      b.cause = str(raw.cause)
-      b.avoid = str(raw.avoid)
+      b.text = cutMark(raw.text)
+      b.cause = cutMark(raw.cause)
+      b.avoid = cutMark(raw.avoid)
     } else if (type === 'steps' || type === 'bulletList') {
-      b.text = str(raw.text)
-      b.items = arr(raw.items).map(str).filter(Boolean)
+      b.text = cutMark(raw.text)
+      b.items = arr(raw.items).map(cutMark).filter(Boolean)
       if (!b.items.length) b.items = ['']
     } else if (type === 'callout') {
       b.tone = raw.tone === 'warn' ? 'warn' : 'tip'
-      b.text = str(raw.text)
-    } else b.text = str(raw.text)
+      b.text = cutMark(raw.text)
+    } else b.text = cutMark(raw.text)
 
     const blank =
       type === 'qa'
@@ -529,14 +543,12 @@ export async function ping(cfg) {
 
 /* ---------- L3：问整个知识库 ---------- */
 
-// 回答里用这一行切开「引你自己的笔记」和「模型自己的知识」
-export const OUTSIDE_MARK = '【库外】'
-
 const ASK_SYSTEM = `你是这个私人知识库的问答助手。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记。
 
 规则：
 - 先依据「资料」回答。来自资料的每条具体结论后面标来源，写成 [1]、[2]，编号必须是资料里出现过的编号。
-- 资料里没有、但你确实知道的内容，另起一段，以「${OUTSIDE_MARK}」开头，让用户一眼看出那不是他自己的笔记。没有这类内容就不要写这一段。
+- 资料里没有、但你确实知道的内容，另起一段，段首单独占一行写「${OUTSIDE_MARK}」，后面全是这部分内容。这个标记是给程序切段用的，渲染时会被自动去掉：不要解释它、不要在同一段里重复它、更不要把它写进要存档的正文里。没有这类内容就不要写这一段。
+- 回答里除了 [n] 和 [[标题]] 这两种引用，不要再出现别的方括号标记、标签或前缀。
 - 资料里没有、你也拿不准的，直接说「库里还没有」，再补一句最接近的是哪一篇、还缺什么。
 - 不要编造数字、论文名、公司案例。用户笔记里没有的具体数字不要补。
 - 中文，先给结论再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。
@@ -930,12 +942,13 @@ const AGENT_ANSWER = `
 回答怎么写：
 - 先给结论，再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。
 - 笔记里有：就按笔记讲，讲完停。
-- 笔记里没有、但你确实知道的：另起一段，以「${OUTSIDE_MARK}」开头，把该讲的内容讲清楚、讲完整；整段讲完，最多用一句话说明库里哪篇最接近、还缺什么。不要把「库里缺什么」写在开头当成答案。
+- 笔记里没有、但你确实知道的：另起一段，段首单独占一行写「${OUTSIDE_MARK}」，把该讲的内容讲清楚、讲完整；整段讲完，最多用一句话说明库里哪篇最接近、还缺什么。不要把「库里缺什么」写在开头当成答案。这个标记是给程序切段用的，渲染时会被去掉：不要解释它、不要重复它、也不要写进 save_note 的块里。
 - read_note 显示某篇只有小节标题没有正文时，就说「库里那篇《X》还是空的」。它的标题只能当成「这个话题还打算写」，不能当成已有结论引用。
 - 不要编造数字、论文名、公司案例。笔记里没有的具体数字不要补。
 - 用户问「有哪些 / 列一下」时，把查到的都列出来，一条一行，每条带 [n]。
 - 库里另有笔记专门讲这件事时，用 [[那篇的完整标题]] 指过去（标题必须和工具返回的完全一致），别把整篇内容抄过来。
 - 笔记之间说法冲突时，指出是哪两篇、各自怎么写，别替他打圆场。
+- 回答里除了 [n] 和 [[标题]]，不要再出现别的方括号标记、标签或前缀。
 - 除非用户明确让你存成笔记，否则不要调用 save_note。`
 
 const AGENT_STRICT = `${AGENT_RULES}
@@ -962,6 +975,7 @@ const ARCHIVE_NUDGE = `把上面这轮问答存进知识库：
 - 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason、blocks。
 - blocks 要按语义分块（paragraph / definition / formula / qa / pitfall / steps / comparison），别把整篇答案塞进一张问答卡。
 - 回答里的 [1] [2] 这些编号原样保留。
+- blocks 里只写库内已有的内容：不要出现「${OUTSIDE_MARK}」这类标记，也不要写别的方括号标签或前缀；没有笔记依据的通用知识、通用数字一律不要放进 blocks。
 - 内容牵涉库里别的笔记时，写 [[那篇的完整标题]]，标题必须和工具返回的一字不差；不确定就不写。
 - 这里的回答是给归档器看的，不用长篇解释；提案提交完说一句归档到哪了就停。`
 

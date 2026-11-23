@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, OUTSIDE_MARK, SECTIONS } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, stripMark, SECTIONS } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
 import {
   state,
@@ -174,7 +174,7 @@ const rich = (text, used = []) => {
   if (!text) return ''
   // [[ ]] 先换成占位符：标题原样比较（esc 之后对不上），也别让 [n] 规则把它吃了
   const links = []
-  let raw = String(text).replace(/\[\[([^\[\]\n]{1,80})\]\]/g, (_m, t) => {
+  let raw = stripMark(text).replace(/\[\[([^\[\]\n]{1,80})\]\]/g, (_m, t) => {
     links.push(t.trim())
     return `\u0000${links.length - 1}\u0000`
   })
@@ -195,12 +195,17 @@ const rich = (text, used = []) => {
   })
 }
 
-// 回答里出现「【库外】」时，后面那段是模型自己的知识，要单独标出来
+// 回答里出现「【库外】」时，后面那段是模型自己的知识，要单独标出来。
+// 这个标记只给这里用：切完再抹一遍，正文里永远不会露出这几个字
+const OUT_RE = /【\s*库外(?:补充)?\s*】/
 const splitOutside = (text) => {
   const s = String(text || '')
-  const i = s.indexOf(OUTSIDE_MARK)
-  if (i < 0) return { inside: s, outside: '' }
-  return { inside: s.slice(0, i).trim(), outside: s.slice(i + OUTSIDE_MARK.length).trim() }
+  const m = s.match(OUT_RE)
+  if (!m) return { inside: stripMark(s), outside: '' }
+  return {
+    inside: stripMark(s.slice(0, m.index)),
+    outside: stripMark(s.slice(m.index + m[0].length)),
+  }
 }
 
 /* ---------- 把一条回答存成笔记 ---------- */
@@ -223,7 +228,7 @@ const noteOptions = computed(() =>
   })),
 )
 
-const OUTSIDE_HEAD = '库外补充'
+const OUTSIDE_HEAD = 'AI 补充（待核对）'
 
 const blankTitle = (q) => (q.length > 38 ? q.slice(0, 38) + '…' : q)
 
@@ -251,7 +256,7 @@ const attachRefs = (blocks, refs) => {
   })
 }
 
-// 勾了「也带库外那段」时追加的块，统一挂到「库外补充」小节下面
+// 勾了「也带上 AI 补充」时追加的块，统一挂到「AI 补充（待核对）」小节下面
 const outsideBlocks = computed(() => {
   const t = savingTurn.value
   if (!t || !saving.value?.outside) return []
@@ -341,14 +346,14 @@ const analyze = async (idx) => {
     }
     if (saving.value !== s) return
     s.blocks = r.blocks
-    s.reason = r.reason
+    s.reason = stripMark(r.reason)
     s.mode = r.target
     s.section = r.section
     if (r.target === 'exist') s.noteId = r.noteId
     else {
       s.topicId = r.topicId
       // 模型给的标题更像笔记名，但用户改过的就别覆盖
-      if (r.title && !s.touchedTitle) s.title = r.title
+      if (r.title && !s.touchedTitle) s.title = stripMark(r.title)
     }
   } catch (e) {
     if (saving.value === s) s.err = String(e.message || e)
@@ -391,6 +396,10 @@ const doSave = () => {
   const clean = (list) =>
     list.map((b) => {
       const { id, ...rest } = b
+      for (const k of Object.keys(rest)) {
+        if (typeof rest[k] === 'string') rest[k] = stripMark(rest[k])
+        else if (Array.isArray(rest[k])) rest[k] = rest[k].map((x) => (typeof x === 'string' ? stripMark(x) : x))
+      }
       return { id: newBlockId(), ...rest }
     })
   const tail = clean(outsideBlocks.value)
@@ -419,7 +428,7 @@ const doSave = () => {
   if (!s.topicId) return
   const note = createNote(s.topicId)
   note.title = (s.title || '').trim() || blankTitle(t.q)
-  note.blocks = ai ? assembleBlocks(ai) : clean(body)
+  note.blocks = clean(ai ? assembleBlocks(ai) : body)
   if (tail.length) insertBlocks(note, OUTSIDE_HEAD, tail)
   saving.value = null
   emit('close')
@@ -433,7 +442,7 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
   <div class="ask">
     <div class="ask-bar">
       <p class="ai-tip">
-        先在你的笔记里找答案。笔记里没有、AI 自己知道的那部分会单独标成「库外」。现在库里
+        先在你的笔记里找答案。笔记里没有、AI 自己知道的那部分会单独放在「AI 补充」里。现在库里
         {{ stats.notes }} 篇 / {{ stats.blocks }} 个知识块。
       </p>
       <label class="ask-strict" :class="{ on: strict }">
@@ -553,7 +562,7 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
 
                 <label v-if="splitOutside(t.a).outside" class="ask-save-out">
                   <input type="checkbox" v-model="saving.outside" />
-                  <span>也带上「库外」那段（AI 外推的，会标成待核对）</span>
+                  <span>也带上「AI 补充」那段（不是你笔记里的内容，会标成待核对）</span>
                 </label>
                 <div class="ai-preview ask-save-pv">
                   <BlockView

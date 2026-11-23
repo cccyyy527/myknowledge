@@ -347,6 +347,26 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .blk-list { margin: 0; padding-left: 22px; }
 .blk-unknown { color: var(--ink-3); }
 
+/* 段内换行：编辑态是 textarea，手敲的 \n 得留着；
+   v-html 里没有 <br>，只能靠 pre-wrap（顺带保留行首缩进） */
+.blk-p,
+.def-text,
+.def-detail,
+.steps-title,
+.blk-steps li,
+.blk-list li,
+.cmp-row > span,
+.blk-callout > span:last-child,
+.blk-todo > span:last-child,
+.pit-row > span:last-child,
+.blk-formula figcaption,
+.blk-img figcaption,
+.agg-main strong,
+.agg-main span {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 /* ---------- editor ---------- */
 .ed-row { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
 .ed-label { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--ink-3); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }

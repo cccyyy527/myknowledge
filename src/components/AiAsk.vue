@@ -179,6 +179,13 @@ const ask = async (preset) => {
         turn.a = r.text
         turn.used = r.refs
         turn.messages = r.messages
+        // 用户当场让它改笔记时，agent 会直接提交提案 —— 这里把面板打开，别只留一句「提案已记录」
+        if (r.proposal) {
+          const s = blankSaving(turn)
+          s.idx = turns.value.length - 1
+          applyProposal(s, r.proposal)
+          saving.value = s
+        }
         done = true
       } catch (e) {
         if (e.name === 'AbortError' || !e.noTools) throw e
@@ -378,6 +385,55 @@ function groupBySection(blocks) {
   return out
 }
 
+// 提案落到面板字段上：agent 自己提交的提案、和「存成笔记」让 AI 判断，都走这里
+const applyProposal = (s, r) => {
+  s.reason = stripMark(r.reason || '')
+  s.err = ''
+  if (r.target === 'edit') {
+    s.mode = 'edit'
+    s.noteId = r.noteId
+    s.blocks = null
+    s.edits = r.edits || []
+    s.plan = r.blocks || []
+    s.skipped = r.skipped || []
+    return
+  }
+  s.blocks = r.blocks
+  s.mode = r.target
+  s.section = r.section
+  s.edits = []
+  s.plan = null
+  s.skipped = []
+  if (r.target === 'exist') s.noteId = r.noteId
+  else {
+    s.topicId = r.topicId
+    // 模型给的标题更像笔记名，但用户改过的就别覆盖
+    if (r.title && !s.touchedTitle) s.title = stripMark(r.title)
+  }
+}
+
+const blankSaving = (t) => {
+  const srcNote = t.used[0] && state.notes.find((n) => n.id === t.used[0].id)
+  const anyTopic = flattenTopics(state.domains[0]?.id, true)[0]?.topic?.id || ''
+  return {
+    idx: null,
+    mode: 'new',
+    topicId: srcNote?.topicId || anyTopic,
+    noteId: srcNote?.id || state.notes[0]?.id || '',
+    section: 'qa',
+    title: blankTitle(t.q),
+    blocks: null,
+    edits: [],
+    plan: null,
+    skipped: [],
+    reason: '',
+    analyzing: false,
+    err: '',
+    trace: [],
+    touchedTitle: false,
+  }
+}
+
 const analyze = async (idx) => {
   const t = turns.value[idx]
   const s = saving.value
@@ -419,25 +475,7 @@ const analyze = async (idx) => {
       })
     }
     if (saving.value !== s) return
-    s.reason = stripMark(r.reason)
-    if (r.target === 'edit') {
-      s.mode = 'edit'
-      s.noteId = r.noteId
-      s.blocks = null
-      s.edits = r.edits || []
-      s.plan = r.blocks || []
-      s.skipped = r.skipped || []
-      return
-    }
-    s.blocks = r.blocks
-    s.mode = r.target
-    s.section = r.section
-    if (r.target === 'exist') s.noteId = r.noteId
-    else {
-      s.topicId = r.topicId
-      // 模型给的标题更像笔记名，但用户改过的就别覆盖
-      if (r.title && !s.touchedTitle) s.title = stripMark(r.title)
-    }
+    applyProposal(s, r)
   } catch (e) {
     if (saving.value === s) s.err = String(e.message || e)
   } finally {
@@ -447,25 +485,9 @@ const analyze = async (idx) => {
 
 const openSave = (idx) => {
   const t = turns.value[idx]
-  const srcNote = t.used[0] && state.notes.find((n) => n.id === t.used[0].id)
-  const anyTopic = flattenTopics(state.domains[0]?.id, true)[0]?.topic?.id || ''
-  saving.value = {
-    idx,
-    mode: 'new',
-    topicId: srcNote?.topicId || anyTopic,
-    noteId: srcNote?.id || state.notes[0]?.id || '',
-    section: 'qa',
-    title: blankTitle(t.q),
-    blocks: null,
-    edits: [],
-    plan: null,
-    skipped: [],
-    reason: '',
-    analyzing: false,
-    err: '',
-    trace: [],
-    touchedTitle: false,
-  }
+  const s = blankSaving(t)
+  s.idx = idx
+  saving.value = s
   if (ready.value) analyze(idx)
 }
 

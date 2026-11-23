@@ -59,7 +59,11 @@ const htmlOf = (text) => {
       return r ? `<button class="qa-cite" data-note="${esc(r.id)}" title="${esc(r.title)}">${d}</button>` : m
     })
   }
-  return s
+  // **加粗** / `行内代码`：跟问答面板里 rich() 的写法保持一致
+  s = s.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>')
+  s = s.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
+  // 换行：先转成 <br> 再交给 pre-wrap，两处都不落空
+  return s.replace(/\n/g, '<br />')
 }
 
 const paraHtml = computed(() => (props.block.type === 'paragraph' ? htmlOf(props.block.text) : ''))

@@ -18,6 +18,9 @@ const path = (note) => {
   const t = topicById(note.topicId)
   return t ? `${domainById(t.domainId).name} / ${t.name}` : '未归类'
 }
+
+// 聚合页是单行摘要，不渲染富文本，只把 ** 和 ` 这些标记抹掉，别让星号露出来
+const plain = (s) => String(s || '').replace(/\*\*/g, '').replace(/`/g, '')
 </script>
 
 <template>
@@ -31,20 +34,20 @@ const path = (note) => {
       <RouterLink v-for="(it, i) in items" :key="i" :to="`/n/${it.note.id}`" class="agg-item">
         <div class="agg-main">
           <template v-if="meta.type === 'definition'">
-            <strong>{{ it.block.term || '（未命名）' }}</strong>
-            <span>{{ it.block.text }}</span>
+            <strong>{{ plain(it.block.term) || '（未命名）' }}</strong>
+            <span>{{ plain(it.block.text) }}</span>
           </template>
           <template v-else-if="meta.type === 'formula'">
             <code class="agg-formula">{{ it.block.latex }}</code>
-            <span>{{ it.block.text }}</span>
+            <span>{{ plain(it.block.text) }}</span>
           </template>
           <template v-else-if="meta.type === 'qa'">
-            <strong>{{ it.block.question || '（未填问题）' }}</strong>
-            <span>{{ it.block.answer }}</span>
+            <strong>{{ plain(it.block.question) || '（未填问题）' }}</strong>
+            <span>{{ plain(it.block.answer) }}</span>
           </template>
           <template v-else>
-            <strong>{{ it.block.text }}</strong>
-            <span>{{ it.block.avoid }}</span>
+            <strong>{{ plain(it.block.text) }}</strong>
+            <span>{{ plain(it.block.avoid) }}</span>
           </template>
         </div>
         <div class="agg-src">{{ it.note.title }} · {{ path(it.note) }}</div>

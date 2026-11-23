@@ -66,11 +66,19 @@ function scoreNote(note, toks, phrase, softToks = []) {
   return score
 }
 
-function noteDigest(note, idx) {
+// 只有小节标题、正文一个字都没有的笔记（建出来还没写的那种）
+export const noteIsEmpty = (note) =>
+  !(note.blocks || []).some((b) => b.type !== 'heading' && blockText(b).trim())
+
+// 给模型看的正文：按小节分段，空笔记直接说清楚是空的，
+// 免得模型把「标题占了关键词」当成「这篇里有内容」
+export function noteText(note, { budget = 7000 } = {}) {
   const path = topicPath(note.topicId).map((t) => t.name).join(' / ')
-  const lines = [`[${idx}] 《${note.title}》　路径：${path || '未归类'}`]
+  const lines = [`《${note.title}》　位置：${path || '未归类'}`]
   if (note.tags?.length) lines.push(`标签：${note.tags.join('、')}`)
+  lines.push(`正文 ${(note.blocks || []).filter((b) => b.type !== 'heading').length} 块`)
   let sec = ''
+  let wrote = false
   for (const b of note.blocks || []) {
     if (b.type === 'heading') {
       sec = b.text || ''
@@ -78,10 +86,53 @@ function noteDigest(note, idx) {
     }
     const t = blockText(b).trim()
     if (!t) continue
+    wrote = true
     const at = sec ? `${b.type} · ${sec}` : b.type
     lines.push(`- (${at}) ${t}`)
   }
-  return lines.join('\n')
+  if (!wrote) lines.push('（这篇只有小节标题，正文还是空的）')
+  const text = lines.join('\n')
+  return text.length > budget ? `${text.slice(0, budget)}\n…（后面截掉了）` : text
+}
+
+// agent 的 search_notes 用：轻量摘要 + 是否空笔记
+export function noteBrief(note, idx) {
+  const path = topicPath(note.topicId).map((t) => t.name).join(' / ')
+  const lead = (note.blocks || [])
+    .filter((b) => b.type !== 'heading')
+    .map((b) => blockText(b).trim())
+    .find(Boolean) || ''
+  return {
+    id: note.id,
+    title: note.title,
+    path: path || '未归类',
+    tags: note.tags || [],
+    empty: noteIsEmpty(note),
+    lead: lead.slice(0, 80),
+    idx,
+  }
+}
+
+// 和 searchLibrary 同一套打分，只是不设相对分下限：换成 agent 反复查，
+// 漏召回比多召回贵得多
+export function searchNotes(question, { limit = 6, extra = '' } = {}) {
+  const phrase = String(question || '').trim().toLowerCase()
+  const toks = tokenize(question)
+  if (!toks.length && !phrase) return []
+  const seen = new Set(toks)
+  const softToks = tokenize(extra).filter((t) => !seen.has(t))
+  return state.notes
+    .map((note) => ({ note, score: scoreNote(note, toks, phrase, softToks) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, limit))
+    .map((x, i) => noteBrief(x.note, i + 1))
+}
+
+function noteDigest(note, idx) {
+  const head = [`[${idx}] 《${note.title}》　路径：${topicPath(note.topicId).map((t) => t.name).join(' / ') || '未归类'}`]
+  const rest = noteText(note).split('\n').slice(1).join('\n')
+  return `${head}\n${rest}`
 }
 
 const byUpdated = (a, b) =>

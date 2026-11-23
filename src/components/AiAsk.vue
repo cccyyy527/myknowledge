@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary, fileAnswer, assembleBlocks, OUTSIDE_MARK, SECTIONS } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, OUTSIDE_MARK, SECTIONS } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
 import {
   state,
@@ -41,6 +41,17 @@ watch(strict, (v) => {
 const ready = computed(() => isAiReady(loadAI()))
 const stats = computed(() => libraryStats())
 
+// 端点不一定支持 tools（DeepSeek 支持，自建反代常常不支持）：
+// 试崩一次就记住，后面直接走老的预检索流程，别每问一次都白等一轮
+const AGENT_KEY = 'myknowledge.agent'
+const agentOk = ref(localStorage.getItem(AGENT_KEY) !== '0')
+const turnOffAgent = () => {
+  agentOk.value = false
+  try {
+    localStorage.setItem(AGENT_KEY, '0')
+  } catch {}
+}
+
 const scroll = async () => {
   await nextTick()
   if (box.value) box.value.scrollTop = box.value.scrollHeight
@@ -63,32 +74,68 @@ const ask = async (preset) => {
     q,
     a: '',
     used: [],
+    trace: [],
     streaming: true,
     err: '',
     fallback: false,
     strict: strict.value,
+    messages: null,
   })
   const turn = turns.value[turns.value.length - 1]
   busy.value = true
   scroll()
 
   ctrl = new AbortController()
+  let done = false
   try {
-    const r = await askLibrary({
-      question: q,
-      history,
-      cfg: loadAI(),
-      strict: strict.value,
-      signal: ctrl.signal,
-      onDelta: (_, full) => {
-        turn.a = full
-        scroll()
-      },
-    })
-    turn.a = r.text
-    turn.used = r.used
-    turn.fallback = r.fallback
-    turn.strict = r.strict
+    if (agentOk.value) {
+      try {
+        const r = await askAgent({
+          question: q,
+          history,
+          cfg: loadAI(),
+          strict: strict.value,
+          signal: ctrl.signal,
+          onDelta: (_, full) => {
+            turn.a = full
+            scroll()
+          },
+          onTrace: (line) => {
+            turn.trace.push(line)
+            // 工具轮里模型可能先嘀咕两句，那不是答案；等它查到东西再重新开始攒
+            turn.a = ''
+            scroll()
+          },
+        })
+        turn.a = r.text
+        turn.used = r.refs
+        turn.messages = r.messages
+        done = true
+      } catch (e) {
+        if (e.name === 'AbortError' || !e.noTools) throw e
+        turnOffAgent()
+        turn.trace = []
+        turn.a = ''
+      }
+    }
+
+    if (!done) {
+      const r = await askLibrary({
+        question: q,
+        history,
+        cfg: loadAI(),
+        strict: strict.value,
+        signal: ctrl.signal,
+        onDelta: (_, full) => {
+          turn.a = full
+          scroll()
+        },
+      })
+      turn.a = r.text
+      turn.used = r.used
+      turn.fallback = r.fallback
+      turn.strict = r.strict
+    }
   } catch (e) {
     if (e.name === 'AbortError') turn.a = turn.a || '（已停止）'
     else turn.err = String(e.message || e)
@@ -245,13 +292,40 @@ const analyze = async (idx) => {
   if (!t || !s || s.analyzing) return
   s.analyzing = true
   s.err = ''
+  s.trace = []
   try {
-    const r = await fileAnswer({
-      question: t.q,
-      answer: splitOutside(t.a).inside,
-      used: t.used,
-      cfg: loadAI(),
-    })
+    let r = null
+    // 沿着问答那轮的会话往下问：模型还记着刚查过哪些笔记、哪篇是空的
+    if (t.messages?.length && agentOk.value) {
+      try {
+        const out = await archiveAgent({
+          messages: t.messages,
+          refs: t.used.map((x) => ({ id: x.id, title: x.title })),
+          cfg: loadAI(),
+          onTrace: (line) => {
+            if (saving.value !== s) return
+            s.trace.push(line)
+            scroll()
+          },
+        })
+        if (out.proposal) {
+          t.messages = out.messages
+          r = out.proposal
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') throw e
+        if (e.noTools) turnOffAgent()
+        // 会话续不上就退回一次性归档判断，别让用户看到错误
+      }
+    }
+    if (!r) {
+      r = await fileAnswer({
+        question: t.q,
+        answer: splitOutside(t.a).inside,
+        used: t.used,
+        cfg: loadAI(),
+      })
+    }
     if (saving.value !== s) return
     s.blocks = r.blocks
     s.reason = r.reason
@@ -286,6 +360,7 @@ const openSave = (idx) => {
     reason: '',
     analyzing: false,
     err: '',
+    trace: [],
     touchedTitle: false,
   }
   if (ready.value) analyze(idx)
@@ -364,6 +439,10 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
         <div class="ask-a">
           <p v-if="t.err" class="ai-msg bad">{{ t.err }}</p>
           <template v-else>
+            <div v-if="t.trace && t.trace.length" class="ask-trace">
+              <span v-for="(g, k) in t.trace" :key="k" class="ask-trace-i">{{ g }}</span>
+            </div>
+            <p v-if="t.streaming && !t.a" class="ask-none">正在翻你的笔记…</p>
             <div class="ask-text" v-html="rich(splitOutside(t.a).inside, t.used)"></div>
             <div v-if="splitOutside(t.a).outside" class="ask-outside">
               <div class="ask-outside-tip">AI 的外部知识，不是你笔记里的内容</div>
@@ -391,6 +470,9 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                 </div>
 
                 <p v-if="saving.analyzing" class="ask-save-why">✨ AI 正在判断该新建还是追加、内容怎么分块…</p>
+                <div v-if="saving.trace && saving.trace.length" class="ask-trace ask-trace-save">
+                  <span v-for="(g, k) in saving.trace" :key="k" class="ask-trace-i">{{ g }}</span>
+                </div>
                 <template v-else-if="saving.reason || saving.err">
                   <p v-if="saving.err" class="ai-msg bad">{{ saving.err }}</p>
                   <p v-else class="ask-save-why">✨ {{ saving.reason }}</p>

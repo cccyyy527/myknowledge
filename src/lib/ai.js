@@ -1,7 +1,7 @@
 // AI 接入：OpenAI 兼容的 /chat/completions
 // key 只存本机 localStorage，和云同步 token 同一套信任模型
 import { state, newBlockId } from './store.js'
-import { buildContext } from './retrieve.js'
+import { buildContext, searchNotes, noteText, noteIsEmpty } from './retrieve.js'
 
 const CFG_KEY = 'myknowledge.ai'
 
@@ -582,8 +582,390 @@ export async function askLibrary({
   return { text, used, fallback, strict }
 }
 
-/* ---------- 识图：截图 → LaTeX / 文字 ---------- */
+/* ---------- L3.5：agent —— 模型自己查、自己读、自己归档 ---------- */
 
+// 工具轮数上限：正常的问答 1～3 轮就够，6 轮还没收尾说明它在瞎转
+export const MAX_ROUNDS = 6
+
+const SECTION_IDS = ['core', 'detail', 'qa', 'pitfall', 'todo']
+
+export const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'search_notes',
+      description:
+        '在用户的知识库里按关键词检索笔记，返回 id、标题、分类路径、是否空笔记、开头一句。可以换不同说法多查几次。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '关键词，比如「CUPED 协变量」' },
+          limit: { type: 'integer', description: '最多返回几篇，默认 6' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_note',
+      description:
+        '读一篇笔记的完整正文（按小节分）。标题看起来对口时一定要读，不要只凭标题判断里面写了什么。',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'search_notes 返回的 id' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_topics',
+      description: '列出知识库的分类树（domain / topic），归档新笔记时用来挑 topicId。',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_note',
+      description:
+        '提交一份归档提案（不会直接写盘，用户要确认）。只有用户让你存成笔记时才调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['new', 'exist'],
+            description: '新建一篇填 new，追加进已有笔记填 exist',
+          },
+          noteId: {
+            type: 'string',
+            description: 'mode=exist 时必填，必须在 search_notes / read_note 里出现过',
+          },
+          topicId: { type: 'string', description: 'mode=new 时必填，取自 list_topics' },
+          title: { type: 'string', description: 'mode=new 时的笔记标题，要短，不带书名号' },
+          section: {
+            type: 'string',
+            enum: SECTION_IDS,
+            description: 'mode=exist 且不想按块分段落时，整段拼到哪一节末尾',
+          },
+          reason: { type: 'string', description: '一句话说明为什么这么归档，会展示给用户看' },
+          blocks: {
+            type: 'array',
+            description: '内容块，每块按语义放对 section',
+            items: {
+              type: 'object',
+              properties: {
+                type: {
+                  type: 'string',
+                  enum: [
+                    'paragraph',
+                    'definition',
+                    'formula',
+                    'comparison',
+                    'qa',
+                    'pitfall',
+                    'steps',
+                    'callout',
+                    'bulletList',
+                    'code',
+                    'todo',
+                  ],
+                },
+                section: { type: 'string', enum: SECTION_IDS },
+                text: { type: 'string' },
+                term: { type: 'string' },
+                detail: { type: 'string' },
+                latex: { type: 'string' },
+                question: { type: 'string' },
+                answer: { type: 'string' },
+                cause: { type: 'string' },
+                avoid: { type: 'string' },
+                left: { type: 'string' },
+                right: { type: 'string' },
+                tone: { type: 'string', enum: ['tip', 'warn'] },
+                items: { type: 'array', items: { type: 'string' } },
+                rows: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: { k: { type: 'string' }, a: { type: 'string' }, b: { type: 'string' } },
+                  },
+                },
+              },
+              required: ['type', 'section'],
+            },
+          },
+        },
+        required: ['mode', 'reason', 'blocks'],
+      },
+    },
+  },
+]
+
+// 带 tools 的流式请求：正文边收边显示，顺带把 tool_calls 拼起来
+export async function chatStreamTools(
+  messages,
+  { cfg, tools, temperature = 0.2, maxTokens = 2000, onDelta, signal } = {},
+) {
+  const c = cfg || loadAI()
+  if (!isAiReady(c)) throw new Error('还没填 API Key，先到「设置」里配一下')
+  const body = { model: c.model, messages, temperature, max_tokens: maxTokens, stream: true }
+  if (tools?.length) {
+    body.tools = tools
+    body.tool_choice = 'auto'
+  }
+  const res = await fetch(endpoint(c.base), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${c.key}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!res.ok) {
+    const msg = await errText(res)
+    const e = new Error(msg)
+    // 有的兼容端点压根不认 tools / functions，这种就退回老的预检索流程
+    if (/tool|function/i.test(msg)) e.noTools = true
+    throw e
+  }
+
+  const reader = res.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  let full = ''
+  const calls = []
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() || ''
+    for (const line of lines) {
+      const s = line.trim()
+      if (!s.startsWith('data:')) continue
+      const payload = s.slice(5).trim()
+      if (!payload || payload === '[DONE]') continue
+      let delta
+      try {
+        delta = JSON.parse(payload)?.choices?.[0]?.delta
+      } catch {
+        continue
+      }
+      if (!delta) continue
+      if (delta.content) {
+        full += delta.content
+        onDelta && onDelta(delta.content, full)
+      }
+      for (const [i, tc] of (delta.tool_calls || []).entries()) {
+        const at = Number.isInteger(tc.index) ? tc.index : i
+        const cur =
+          calls[at] || (calls[at] = { id: '', type: 'function', function: { name: '', arguments: '' } })
+        if (tc.id) cur.id = tc.id
+        if (tc.function?.name) cur.function.name += tc.function.name
+        if (tc.function?.arguments) cur.function.arguments += tc.function.arguments
+      }
+    }
+  }
+  const toolCalls = calls
+    .filter(Boolean)
+    .filter((x) => x.function.name)
+    .map((x, i) => ({ ...x, id: x.id || `call_${Date.now().toString(36)}_${i}` }))
+  return { text: full, toolCalls }
+}
+
+// 回答里的 [n] 按检索顺序编号：同一篇重复命中不重新编号
+function citeIndex(ctx, note) {
+  const at = ctx.refs.findIndex((r) => r.id === note.id)
+  if (at >= 0) return at + 1
+  ctx.refs.push({ id: note.id, title: note.title })
+  return ctx.refs.length
+}
+
+function runTool(ctx, call) {
+  const name = call.function?.name || ''
+  let args = {}
+  try {
+    args = JSON.parse(call.function?.arguments || '{}') || {}
+  } catch {
+    args = {}
+  }
+
+  if (name === 'search_notes') {
+    const q = str(args.query).trim()
+    const limit = Math.min(10, Math.max(1, Number(args.limit) || 6))
+    const hits = q ? searchNotes(q, { limit }) : []
+    if (!hits.length) {
+      return {
+        content: `「${q}」没有检索到相关笔记。可以换个说法再查（比如只用核心名词），或者用 list_topics 看都有哪些分类。`,
+        summary: `🔍 查「${q}」→ 0 篇`,
+      }
+    }
+    const lines = hits.map((h) => {
+      const n = citeIndex(ctx, state.notes.find((x) => x.id === h.id) || h)
+      const flags = h.empty ? '｜空笔记（只有小节标题，没有正文）' : h.lead ? `｜开头：${h.lead}` : ''
+      const tags = h.tags.length ? `｜标签：${h.tags.join('、')}` : ''
+      return `[${n}] 《${h.title}》（id: ${h.id}）｜位置：${h.path}${flags}${tags}`
+    })
+    return {
+      content: `找到 ${hits.length} 篇（编号用于回答里的 [n]）：\n${lines.join('\n')}`,
+      summary: `🔍 查「${q}」→ ${hits.length} 篇`,
+    }
+  }
+
+  if (name === 'read_note') {
+    const note = state.notes.find((x) => x.id === str(args.id))
+    if (!note) {
+      return { content: `没有 id 为 ${str(args.id)} 的笔记，用 search_notes 重新查。`, summary: '📖 读不到（id 不对）' }
+    }
+    const n = citeIndex(ctx, note)
+    const empty = noteIsEmpty(note)
+    return {
+      content: `[${n}] ${noteText(note)}`,
+      summary: `📖 读《${note.title}》→ ${empty ? '空笔记' : '正文'} `,
+    }
+  }
+
+  if (name === 'list_topics') {
+    return { content: `分类树：\n${topicCatalog()}`, summary: '🗂 看分类树' }
+  }
+
+  if (name === 'save_note') {
+    const blocks = normalizeBlocks(args.blocks)
+    if (!blocks.length) {
+      return {
+        content: 'blocks 为空或不合法，提案没有记录。请重新调用 save_note，给出至少一个真正有内容的块。',
+        summary: '🗂 提案无效（blocks 为空）',
+      }
+    }
+    const note = state.notes.find((x) => x.id === str(args.noteId))
+    const mode = args.mode === 'exist' && note ? 'exist' : 'new'
+    const topicId = mode === 'exist' ? note.topicId : topicExists(args.topicId) ? args.topicId : fallbackTopicId()
+    ctx.proposal = {
+      target: mode,
+      title: str(args.title),
+      topicId,
+      noteId: mode === 'exist' ? note.id : '',
+      section: SECTIONS.some((s) => s.id === args.section) ? args.section : blocks[0].section || 'core',
+      reason: str(args.reason),
+      blocks,
+    }
+    const where =
+      mode === 'exist'
+        ? `写进《${note.title}》${blocks.length} 块`
+        : `新建《${str(args.title) || '未命名'}》${blocks.length} 块`
+    return {
+      content: `提案已记录：${where}。用户可以改也可以取消——不要再提交一遍，也不要在正文里复述这些块。`,
+      summary: `🗂 归档：${where}`,
+    }
+  }
+
+  return { content: `没有叫 ${name} 的工具。`, summary: `⚠ 未知工具 ${name}` }
+}
+
+// agent 循环：有 tool_call 就执行工具接着问，没有了就是最终回答
+export async function agentRun({
+  messages,
+  cfg,
+  strict = false,
+  refs = [],
+  maxTokens = 2000,
+  onDelta,
+  onTrace,
+  signal,
+} = {}) {
+  if (!isAiReady(cfg || loadAI())) throw new Error('还没填 API Key，先到「设置」里配一下')
+  const msgs = [...messages]
+  const ctx = { refs: refs.map((r) => ({ ...r })), proposal: null }
+  let answer = ''
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const { text, toolCalls } = await chatStreamTools(msgs, {
+      cfg,
+      tools: TOOLS,
+      temperature: strict ? 0.1 : 0.25,
+      maxTokens,
+      onDelta,
+      signal,
+    })
+    if (!toolCalls.length) {
+      answer = text
+      msgs.push({ role: 'assistant', content: text })
+      break
+    }
+    msgs.push({
+      role: 'assistant',
+      content: text || null,
+      tool_calls: toolCalls.map((c) => ({ id: c.id, type: 'function', function: c.function })),
+    })
+    for (const call of toolCalls) {
+      const out = runTool(ctx, call)
+      onTrace && onTrace(out.summary)
+      msgs.push({ role: 'tool', tool_call_id: call.id, content: out.content })
+    }
+  }
+  if (!answer) throw new Error(`模型查了 ${MAX_ROUNDS} 轮还没给出答案，换个问法试试`)
+  return { text: answer, refs: ctx.refs, proposal: ctx.proposal, messages: msgs }
+}
+
+const AGENT_RULES = `你是这个私人知识库的 agent。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记——其中有些笔记只有小节标题、正文还是空的。
+
+你能调用工具：search_notes 检索、read_note 读整篇、list_topics 看分类、save_note 提交归档提案。
+
+怎么用工具：
+- 先 search_notes，可以换 2～3 种说法反复查，别查一次没中就下结论。
+- 结果里标题看着对口的，一定 read_note 打开看正文，不要凭标题猜里面写了什么。
+- 来自笔记的具体结论后面标 [n]，n 必须是工具返回的那些编号，不要自己另编号。`
+
+const AGENT_ANSWER = `
+
+回答怎么写：
+- 先给结论，再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。
+- 笔记里有：就按笔记讲，讲完停。
+- 笔记里没有、但你确实知道的：另起一段，以「${OUTSIDE_MARK}」开头，把该讲的内容讲清楚、讲完整；整段讲完，最多用一句话说明库里哪篇最接近、还缺什么。不要把「库里缺什么」写在开头当成答案。
+- read_note 显示某篇只有小节标题没有正文时，就说「库里那篇《X》还是空的」。它的标题只能当成「这个话题还打算写」，不能当成已有结论引用。
+- 不要编造数字、论文名、公司案例。笔记里没有的具体数字不要补。
+- 用户问「有哪些 / 列一下」时，把查到的都列出来，一条一行，每条带 [n]。
+- 笔记之间说法冲突时，指出是哪两篇、各自怎么写，别替他打圆场。
+- 除非用户明确让你存成笔记，否则不要调用 save_note。`
+
+const AGENT_STRICT = `${AGENT_RULES}
+
+只查笔记模式（用户面试前怕被带偏，一个字都不许超出笔记）：
+- 只能依据 read_note / search_notes 拿到的内容回答，每条具体结论都带 [n]。
+- 禁止用你自己的通用知识补充，禁止写「${OUTSIDE_MARK}」段落，禁止编造数字、论文名、公司案例。
+- 笔记里没写的直接说「库里还没有」，再说最接近哪一篇、缺什么，然后就停。
+- 中文，先给结论再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。`
+
+// history 只放最近几轮问答，别把整段对话灌进去
+export function askAgent({ question, history = [], cfg, strict = false, ...rest } = {}) {
+  const messages = [
+    { role: 'system', content: strict ? AGENT_STRICT : AGENT_RULES + AGENT_ANSWER },
+    ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+    { role: 'user', content: question },
+  ]
+  return agentRun({ messages, cfg, strict, ...rest })
+}
+
+const ARCHIVE_NUDGE = `把上面这轮问答存进知识库：
+- 先 search_notes 查有没有同主题的笔记。空骨架的也算同主题，内容直接填进那篇，不要另建重复的。
+- 需要的话 read_note 看它已有的小节标题，好把内容插对地方。
+- 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason、blocks。
+- blocks 要按语义分块（paragraph / definition / formula / qa / pitfall / steps / comparison），别把整篇答案塞进一张问答卡。
+- 回答里的 [1] [2] 这些编号原样保留。
+- 这里的回答是给归档器看的，不用长篇解释；提案提交完说一句归档到哪了就停。`
+
+// 沿着问答那轮的同一个会话往下走：模型还记着刚才查过什么，判断更准
+export function archiveAgent({ messages, refs = [], cfg, onTrace, signal } = {}) {
+  const next = [...messages, { role: 'user', content: ARCHIVE_NUDGE }]
+  return agentRun({ messages: next, refs, cfg, maxTokens: 2000, onTrace, signal })
+}
+
+/* ---------- 识图：截图 → LaTeX / 文字 ---------- */
 // 图片先缩到长边 1600 再转 base64：请求体不至于几十 MB，慢网也能发出去
 export async function imageToDataUrl(source, { maxSide = 1600, quality = 0.85 } = {}) {
   let blob = source

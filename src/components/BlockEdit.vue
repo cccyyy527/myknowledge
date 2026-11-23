@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue'
 import katex from 'katex'
 import OcrDialog from './OcrDialog.vue'
+import { state } from '../lib/store.js'
+import { normTitle } from '../lib/links.js'
 
 const props = defineProps({
   block: { type: Object, required: true },
@@ -29,6 +31,84 @@ const grow = (el) => {
 }
 
 const vGrow = { mounted: grow, updated: grow }
+
+/* ---------- 打 [[ 时弹出笔记标题候选 ----------
+   插进去的是纯文本 [[标题]]，引用关系由渲染那层按标题现算，
+   所以这里只管把标题写对，不用管 id。 */
+const wiki = ref(null)
+const closeWiki = () => {
+  wiki.value = null
+}
+
+const syncWiki = (el) => {
+  const caret = el.selectionStart ?? 0
+  const upto = String(el.value || '').slice(0, caret)
+  const open = upto.lastIndexOf('[[')
+  if (open < 0) return closeWiki()
+  const seg = upto.slice(open + 2)
+  if (/[\[\]\n]/.test(seg)) return closeWiki()
+  const q = normTitle(seg)
+  const seen = new Set()
+  const list = []
+  for (const n of state.notes) {
+    const t = String(n.title || '').trim()
+    const k = normTitle(t)
+    if (!k || seen.has(k) || (q && !k.includes(q))) continue
+    seen.add(k)
+    list.push(t)
+  }
+  const items = list.slice(0, 8).map((t) => ({ title: t, fresh: false }))
+  if (q && !list.some((t) => normTitle(t) === q)) items.unshift({ title: seg.trim(), fresh: true })
+  if (!items.length) return closeWiki()
+  const r = el.getBoundingClientRect()
+  wiki.value = {
+    items,
+    sel: 0,
+    el,
+    start: open,
+    caret,
+    x: r.left,
+    y: r.bottom + 4,
+    w: Math.max(180, Math.min(r.width || 240, 320)),
+  }
+}
+
+const onWikiInput = (e) => {
+  const tag = e.target?.tagName
+  if (tag === 'TEXTAREA' || tag === 'INPUT') syncWiki(e.target)
+}
+
+const pickWiki = (title) => {
+  const s = wiki.value
+  if (!s) return
+  const el = s.el
+  el.focus()
+  el.setSelectionRange(s.start, s.caret)
+  el.setRangeText(`[[${title}]]`, s.start, s.caret, 'end')
+  el.dispatchEvent(new Event('input'))
+  closeWiki()
+}
+
+const onWikiKey = (e) => {
+  if (!wiki.value) return
+  const n = wiki.value.items.length
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    wiki.value.sel = (wiki.value.sel + 1) % n
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    wiki.value.sel = (wiki.value.sel - 1 + n) % n
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    e.preventDefault()
+    pickWiki(wiki.value.items[wiki.value.sel].title)
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    closeWiki()
+  }
+}
+
+// 点候选是 mousedown.prevent，走不到 blur；这里兜住键盘 Tab 出去的情况
+const onWikiBlur = () => closeWiki()
 
 /* ---------- 图片：识图交给 OcrDialog（本地截图 / 粘贴都行） ---------- */
 
@@ -77,7 +157,16 @@ const LABELS = {
     </template>
 
     <template v-else-if="block.type === 'paragraph'">
-      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="写点内容…" />
+      <textarea
+        v-model="block.text"
+        v-grow
+        class="inp inp-text"
+        rows="2"
+        placeholder="写点内容…（打 [[ 可以引用另一篇笔记）"
+        @input="onWikiInput"
+        @keydown="onWikiKey"
+        @blur="onWikiBlur"
+      />
     </template>
 
     <template v-else-if="block.type === 'callout'">
@@ -85,7 +174,16 @@ const LABELS = {
         <option value="tip">提示</option>
         <option value="warn">注意</option>
       </select>
-      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="提示内容" />
+      <textarea
+        v-model="block.text"
+        v-grow
+        class="inp inp-text"
+        rows="2"
+        placeholder="提示内容"
+        @input="onWikiInput"
+        @keydown="onWikiKey"
+        @blur="onWikiBlur"
+      />
     </template>
 
     <template v-else-if="block.type === 'formula'">
@@ -96,8 +194,26 @@ const LABELS = {
 
     <template v-else-if="block.type === 'definition'">
       <input v-model="block.term" class="inp" placeholder="术语" />
-      <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" placeholder="一句话定义" />
-      <textarea v-model="block.detail" v-grow class="inp inp-text" rows="2" placeholder="展开细节（可选）" />
+      <textarea
+        v-model="block.text"
+        v-grow
+        class="inp inp-text"
+        rows="2"
+        placeholder="一句话定义"
+        @input="onWikiInput"
+        @keydown="onWikiKey"
+        @blur="onWikiBlur"
+      />
+      <textarea
+        v-model="block.detail"
+        v-grow
+        class="inp inp-text"
+        rows="2"
+        placeholder="展开细节（可选）"
+        @input="onWikiInput"
+        @keydown="onWikiKey"
+        @blur="onWikiBlur"
+      />
     </template>
 
     <template v-else-if="block.type === 'steps'">
@@ -127,7 +243,16 @@ const LABELS = {
 
     <template v-else-if="block.type === 'qa'">
       <input v-model="block.question" class="inp" placeholder="问题" />
-      <textarea v-model="block.answer" v-grow class="inp inp-text" rows="3" placeholder="答案" />
+      <textarea
+        v-model="block.answer"
+        v-grow
+        class="inp inp-text"
+        rows="3"
+        placeholder="答案"
+        @input="onWikiInput"
+        @keydown="onWikiKey"
+        @blur="onWikiBlur"
+      />
     </template>
 
     <template v-else-if="block.type === 'pitfall'">
@@ -137,7 +262,14 @@ const LABELS = {
     </template>
 
     <template v-else-if="block.type === 'todo'">
-      <input v-model="block.text" class="inp" placeholder="待补什么" />
+      <input
+        v-model="block.text"
+        class="inp"
+        placeholder="待补什么"
+        @input="onWikiInput"
+        @keydown="onWikiKey"
+        @blur="onWikiBlur"
+      />
     </template>
 
     <template v-else-if="block.type === 'image'">
@@ -184,5 +316,26 @@ const LABELS = {
     <template v-else>
       <textarea v-model="block.text" v-grow class="inp inp-text" rows="2" />
     </template>
+
+    <Teleport to="body">
+      <div
+        v-if="wiki"
+        class="wiki-pop"
+        :style="{ left: wiki.x + 'px', top: wiki.y + 'px', width: wiki.w + 'px' }"
+      >
+        <button
+          v-for="(it, i) in wiki.items"
+          :key="it.title + i"
+          class="wiki-opt"
+          :class="{ on: i === wiki.sel, fresh: it.fresh }"
+          @mousedown.prevent="pickWiki(it.title)"
+          @mouseenter="wiki.sel = i"
+        >
+          <span class="wiki-opt-t">{{ it.title }}</span>
+          <span v-if="it.fresh" class="wiki-opt-k">新建</span>
+        </button>
+        <div class="wiki-foot">↑↓ 选 · Enter 插进去 · Esc 关掉</div>
+      </div>
+    </Teleport>
   </div>
 </template>

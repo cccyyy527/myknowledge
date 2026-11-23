@@ -11,7 +11,10 @@ import {
   newBlockId,
   noteBadges,
   insertBlocks,
+  createNote,
+  state,
 } from '../lib/store.js'
+import { backlinksTo } from '../lib/links.js'
 import BlockView from '../components/BlockView.vue'
 import BlockEdit from '../components/BlockEdit.vue'
 import AiBlockDialog from '../components/AiBlockDialog.vue'
@@ -418,6 +421,18 @@ const openRef = (id) => {
   if (!id || id === note.value.id || !noteById(id)) return
   router.push(`/n/${id}`)
 }
+
+// 点了「未创建」的 [[标题]]：就地按这个标题建一篇，挂在当前笔记同一个子分类下
+const makeNote = (title) => {
+  const t = String(title || '').trim()
+  if (!t || !note.value) return
+  const made = createNote(note.value.topicId)
+  made.title = t
+  touchNote(made)
+  router.push(`/n/${made.id}`)
+}
+
+const backlinks = computed(() => backlinksTo(note.value?.id, state.notes))
 </script>
 
 <template>
@@ -538,7 +553,7 @@ const openRef = (id) => {
         :data-bid="b.id"
         @dblclick="editAt(b.id)"
       >
-        <BlockView :block="b" @open-note="openRef" />
+        <BlockView :block="b" @open-note="openRef" @make-note="makeNote" />
         <button
           v-if="isTouch"
           class="rd-edit"
@@ -552,6 +567,20 @@ const openRef = (id) => {
         这篇还没有概念 / 公式 / 问答 / 坑卡片。
       </p>
     </article>
+
+    <section v-if="mode !== 'edit' && backlinks.length" class="backlinks">
+      <h3 class="bl-title">被引用</h3>
+      <p class="muted bl-hint">别的笔记正文里写了 [[{{ note.title }}]] 的地方</p>
+      <button
+        v-for="b in backlinks"
+        :key="b.from"
+        class="bl-item"
+        @click="router.push(`/n/${b.from}`)"
+      >
+        <span class="bl-from">{{ b.title }}</span>
+        <span v-if="b.snippet" class="bl-snip">{{ b.snippet }}</span>
+      </button>
+    </section>
 
     <button
       v-if="fabOn"

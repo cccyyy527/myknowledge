@@ -280,6 +280,61 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .qa-cite:hover { background: var(--accent); color: #fff; }
 
+/* ---------- [[标题]] 笔记互引 ---------- */
+.note-link {
+  font: inherit; font-size: 12.5px; line-height: 1.5;
+  padding: 0 5px; margin: 0 1px; border: 1px solid transparent; border-radius: 5px;
+  background: var(--accent-soft); color: var(--accent); cursor: pointer;
+  text-align: left; max-width: 100%; overflow-wrap: anywhere;
+}
+.note-link:hover { background: var(--accent); color: #fff; }
+.note-link.missing {
+  background: transparent; color: #b06a5a; border-style: dashed; border-color: #d9b1a6;
+}
+.note-link.missing:hover { background: #fbf0ec; color: #8f4636; }
+
+/* 整个段落只有一个 [[ ]] 时当成一张页面卡 */
+.note-link-card {
+  display: block; width: 100%; padding: 9px 13px; margin: 0; border-radius: var(--radius);
+  border: 1px solid var(--line); background: #fff; color: var(--ink-1);
+  font-size: 13.5px; font-weight: 600;
+}
+.note-link-card::before { content: '↗  '; color: var(--ink-3); font-weight: 400; }
+.note-link-card:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.note-link-card.missing { background: #fdfaf8; }
+.note-link-card.missing::before { content: '✎  '; }
+
+/* 反链 */
+.backlinks { margin-top: 26px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.bl-title { font-size: 12.5px; font-weight: 700; color: var(--ink-2); margin: 0 0 3px; }
+.bl-hint { font-size: 11.5px; margin: 0 0 9px; }
+.bl-item {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  padding: 7px 11px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; cursor: pointer;
+}
+.bl-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+.bl-from { font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.bl-snip { font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
+
+/* [[ 候选浮层：fixed 定位，跟着输入框走，不被 overflow 裁 */
+.wiki-pop {
+  position: fixed; z-index: 90;
+  background: #fff; border: 1px solid var(--line); border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(30, 25, 20, 0.14);
+  padding: 4px; max-height: 250px; overflow-y: auto;
+}
+.wiki-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 6px 8px; border: 0; border-radius: 6px;
+  background: transparent; cursor: pointer; text-align: left;
+}
+.wiki-opt.on { background: var(--accent-soft); }
+.wiki-opt-t { font-size: 12.5px; color: var(--ink-1); overflow-wrap: anywhere; }
+.wiki-opt.on .wiki-opt-t { color: var(--accent); font-weight: 600; }
+.wiki-opt-k { flex: none; font-size: 10px; color: #b06a5a; border: 1px dashed #d9b1a6; border-radius: 3px; padding: 0 4px; }
+.wiki-foot { padding: 4px 8px 3px; font-size: 10.5px; color: var(--ink-3); border-top: 1px solid var(--line); margin-top: 3px; }
+
 .blk-pitfall { background: #fdf8f4; border: 1px solid #f0dfd1; border-radius: var(--radius); padding: 11px 14px; font-size: 13.5px; }
 .pit-title { display: inline-block; font-size: 10.5px; font-weight: 700; color: #fff; background: var(--warn); border-radius: 4px; padding: 1px 6px; margin-bottom: 6px; }
 .pit-row { display: flex; gap: 9px; margin: 2px 0; }
@@ -640,6 +695,13 @@ code { font-family: var(--mono); font-size: 0.9em; }
   background: var(--accent-soft); color: var(--accent); cursor: pointer;
 }
 .ask-cite:hover { background: var(--accent); color: #fff; }
+.ask-link {
+  font: inherit; font-size: 12.5px; padding: 0 5px; margin: 0 1px;
+  border: 1px solid transparent; border-radius: 5px;
+  background: var(--accent-soft); color: var(--accent); cursor: pointer;
+}
+.ask-link:hover { background: var(--accent); color: #fff; }
+.ask-link.missing { background: transparent; color: #b06a5a; border-style: dashed; border-color: #d9b1a6; cursor: default; }
 .ask-src { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .ask-chip {
   display: inline-flex; align-items: center; gap: 5px; max-width: 100%;

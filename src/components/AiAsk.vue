@@ -13,6 +13,7 @@ import {
   touchNote,
 } from '../lib/store.js'
 import BlockView from './BlockView.vue'
+import { normTitle } from '../lib/links.js'
 
 const emit = defineEmits(['close', 'setup'])
 const router = useRouter()
@@ -161,17 +162,23 @@ const jump = (id) => {
 }
 
 const onThreadClick = (e) => {
-  const el = e.target.closest && e.target.closest('.ask-cite')
-  if (el) jump(el.dataset.note)
+  const el = e.target.closest && e.target.closest('.ask-cite, .ask-link')
+  if (el && el.dataset.note) jump(el.dataset.note)
 }
 
 const esc = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-// 只支持粗体 / 行内代码 / [n] 引用，够用且不会被模型带进奇怪的 HTML
+// 只支持粗体 / 行内代码 / [n] 引用 / [[笔记标题]]，够用且不会被模型带进奇怪的 HTML
 const rich = (text, used = []) => {
   if (!text) return ''
-  let s = esc(text)
+  // [[ ]] 先换成占位符：标题原样比较（esc 之后对不上），也别让 [n] 规则把它吃了
+  const links = []
+  let raw = String(text).replace(/\[\[([^\[\]\n]{1,80})\]\]/g, (_m, t) => {
+    links.push(t.trim())
+    return `\u0000${links.length - 1}\u0000`
+  })
+  let s = esc(raw)
   s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>')
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
   s = s.replace(/\[(\d+)\]/g, (m, d) => {
@@ -179,7 +186,13 @@ const rich = (text, used = []) => {
     if (n < 1 || n > used.length) return m
     return `<button class="ask-cite" data-note="${used[n - 1].id}">${n}</button>`
   })
-  return s
+  return s.replace(/\u0000(\d+)\u0000/g, (_m, i) => {
+    const t = links[Number(i)] || ''
+    const hit = state.notes.find((n) => normTitle(n.title) === normTitle(t))
+    return hit
+      ? `<button class="ask-link" data-note="${hit.id}" title="跳到《${esc(hit.title)}》">${esc(t)}</button>`
+      : `<span class="ask-link missing" title="库里还没有这篇">${esc(t)}</span>`
+  })
 }
 
 // 回答里出现「【库外】」时，后面那段是模型自己的知识，要单独标出来

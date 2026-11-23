@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary, OUTSIDE_MARK, SECTIONS } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, fileAnswer, assembleBlocks, OUTSIDE_MARK, SECTIONS } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
 import {
   state,
@@ -145,7 +145,7 @@ const splitOutside = (text) => {
 
 /* ---------- 把一条回答存成笔记 ---------- */
 
-const saving = ref(null) // { idx, mode:'new'|'exist', topicId, noteId, section, outside }
+const saving = ref(null) // { idx, mode, topicId, noteId, section, outside, title, blocks, reason, analyzing, err }
 
 const groups = computed(() =>
   state.domains.map((d) => ({ domain: d, rows: flattenTopics(d.id, true) })),
@@ -163,34 +163,112 @@ const noteOptions = computed(() =>
   })),
 )
 
-// 预览用的块：问答卡留住问题和答法，[n] 的出处附在后面才查得到
-const savingBlocks = computed(() => {
+const OUTSIDE_HEAD = '库外补充'
+
+const blankTitle = (q) => (q.length > 38 ? q.slice(0, 38) + '…' : q)
+
+// AI 没判断出来时的兜底：整条回答就是一张问答卡
+const plainBlocks = computed(() => {
   const t = savingTurn.value
-  if (!t || !saving.value) return []
-  const { inside, outside } = splitOutside(t.a)
+  if (!t) return []
+  const { inside } = splitOutside(t.a)
   const src = t.used.length
     ? '\n\n来源：' + t.used.map((s, i) => `[${i + 1}] ${s.title}`).join('　')
     : ''
-  // refs 让 [n] 在笔记里还能点回原笔记；answer 里的文字留着，导出 / 复制也不丢
   const refs = t.used.map((s) => ({ id: s.id, title: s.title }))
+  return [{ id: 'pv-qa', type: 'qa', question: t.q, answer: (inside || '（空）') + src, refs }]
+})
+
+// [n] 落到哪个块上，就把 refs 记在那个块里，渲染时才能点
+const REF_RE = /\[\d+\]/
+const attachRefs = (blocks, refs) => {
+  if (!refs.length) return blocks
+  const fields = ['text', 'detail', 'answer', 'cause', 'avoid', 'term']
+  return blocks.map((b) => {
+    const hit =
+      fields.some((k) => REF_RE.test(b[k] || '')) || (b.items || []).some((s) => REF_RE.test(s))
+    return hit ? { ...b, refs } : b
+  })
+}
+
+// 勾了「也带库外那段」时追加的块，统一挂到「库外补充」小节下面
+const outsideBlocks = computed(() => {
+  const t = savingTurn.value
+  if (!t || !saving.value?.outside) return []
+  const { outside } = splitOutside(t.a)
+  if (!outside) return []
   const out = [
-    { id: 'pv-qa', type: 'qa', question: t.q, answer: (inside || '（空）') + src, refs },
-  ]
-  if (saving.value.outside && outside) {
-    out.push({
+    {
       id: 'pv-warn',
       type: 'callout',
       tone: 'warn',
       text: '下面这段是 AI 的外部知识，不是你笔记里的内容，存进来后自己核一遍再当结论用。',
-    })
-    let i = 0
-    for (const para of outside.split(/\n{2,}/)) {
-      const text = para.trim()
-      if (text) out.push({ id: `pv-p${i++}`, type: 'paragraph', text })
-    }
+    },
+  ]
+  let i = 0
+  for (const para of outside.split(/\n{2,}/)) {
+    const text = para.trim()
+    if (text) out.push({ id: `pv-p${i++}`, type: 'paragraph', text })
   }
   return out
 })
+
+// 预览：有 AI 分块就按段落排，没有就退回一张问答卡
+const savingBlocks = computed(() => {
+  const s = saving.value
+  if (!s) return []
+  const refs = (savingTurn.value?.used || []).map((x) => ({ id: x.id, title: x.title }))
+  const body = s.blocks?.length ? groupBySection(attachRefs(s.blocks, refs)) : plainBlocks.value
+  return outsideBlocks.value.length
+    ? [...body, { id: 'pv-oh', type: 'heading', level: 2, text: OUTSIDE_HEAD }, ...outsideBlocks.value]
+    : body
+})
+
+// 预览里的引用 chip：开新标签看原文，别把面板连同草稿一起关掉
+const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
+
+// 只给真有内容的段落加标题，预览里不出现空小节
+function groupBySection(blocks) {
+  const out = []
+  for (const sec of SECTIONS) {
+    const items = blocks.filter((b) => (b.section || 'core') === sec.id)
+    if (!items.length) continue
+    out.push({ id: 'pv-h-' + sec.id, type: 'heading', level: 2, text: sec.title })
+    out.push(...items)
+  }
+  return out
+}
+
+const analyze = async (idx) => {
+  const t = turns.value[idx]
+  const s = saving.value
+  if (!t || !s || s.analyzing) return
+  s.analyzing = true
+  s.err = ''
+  try {
+    const r = await fileAnswer({
+      question: t.q,
+      answer: splitOutside(t.a).inside,
+      used: t.used,
+      cfg: loadAI(),
+    })
+    if (saving.value !== s) return
+    s.blocks = r.blocks
+    s.reason = r.reason
+    s.mode = r.target
+    s.section = r.section
+    if (r.target === 'exist') s.noteId = r.noteId
+    else {
+      s.topicId = r.topicId
+      // 模型给的标题更像笔记名，但用户改过的就别覆盖
+      if (r.title && !s.touchedTitle) s.title = r.title
+    }
+  } catch (e) {
+    if (saving.value === s) s.err = String(e.message || e)
+  } finally {
+    if (saving.value === s) s.analyzing = false
+  }
+}
 
 const openSave = (idx) => {
   const t = turns.value[idx]
@@ -203,24 +281,46 @@ const openSave = (idx) => {
     noteId: srcNote?.id || state.notes[0]?.id || '',
     section: 'qa',
     outside: false,
+    title: blankTitle(t.q),
+    blocks: null,
+    reason: '',
+    analyzing: false,
+    err: '',
+    touchedTitle: false,
   }
+  if (ready.value) analyze(idx)
 }
 
 const doSave = () => {
   const t = savingTurn.value
   const s = saving.value
-  if (!t || !s) return
+  if (!t || !s || s.analyzing) return
 
-  const clean = savingBlocks.value.map((b) => {
-    const { id, ...rest } = b
-    return { id: newBlockId(), ...rest }
-  })
+  const refs = t.used.map((x) => ({ id: x.id, title: x.title }))
+  const ai = s.blocks?.length ? attachRefs(s.blocks, refs) : null
+  const body = ai || plainBlocks.value
+
+  const clean = (list) =>
+    list.map((b) => {
+      const { id, ...rest } = b
+      return { id: newBlockId(), ...rest }
+    })
+  const tail = clean(outsideBlocks.value)
 
   if (s.mode === 'exist') {
     const note = state.notes.find((n) => n.id === s.noteId)
     if (!note) return
-    const sec = SECTIONS.find((x) => x.id === s.section) || SECTIONS[0]
-    insertBlocks(note, sec.title, clean)
+    if (ai) {
+      // AI 已经把每块归好段了，按段落分别拼进去
+      for (const sec of SECTIONS) {
+        const items = clean(ai.filter((b) => (b.section || 'core') === sec.id))
+        if (items.length) insertBlocks(note, sec.title, items)
+      }
+    } else {
+      const sec = SECTIONS.find((x) => x.id === s.section) || SECTIONS[0]
+      insertBlocks(note, sec.title, clean(body))
+    }
+    if (tail.length) insertBlocks(note, OUTSIDE_HEAD, tail)
     touchNote(note)
     saving.value = null
     emit('close')
@@ -230,8 +330,9 @@ const doSave = () => {
 
   if (!s.topicId) return
   const note = createNote(s.topicId)
-  note.title = t.q.length > 38 ? t.q.slice(0, 38) + '…' : t.q
-  note.blocks = clean
+  note.title = (s.title || '').trim() || blankTitle(t.q)
+  note.blocks = ai ? assembleBlocks(ai) : clean(body)
+  if (tail.length) insertBlocks(note, OUTSIDE_HEAD, tail)
   saving.value = null
   emit('close')
   router.push(`/n/${note.id}`)
@@ -289,6 +390,13 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   <button class="ask-save-x" title="取消" @click="saving = null">×</button>
                 </div>
 
+                <p v-if="saving.analyzing" class="ask-save-why">✨ AI 正在判断该新建还是追加、内容怎么分块…</p>
+                <template v-else-if="saving.reason || saving.err">
+                  <p v-if="saving.err" class="ai-msg bad">{{ saving.err }}</p>
+                  <p v-else class="ask-save-why">✨ {{ saving.reason }}</p>
+                  <button class="ask-save-retry" @click="analyze(saving.idx)">↻ 让 AI 重新判断</button>
+                </template>
+
                 <div class="ask-save-mode">
                   <button :class="{ on: saving.mode === 'new' }" @click="saving.mode = 'new'">
                     新建一篇
@@ -303,6 +411,15 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                 </div>
 
                 <template v-if="saving.mode === 'new'">
+                  <label class="ai-pick">
+                    <span>标题</span>
+                    <input
+                      v-model.trim="saving.title"
+                      class="ask-save-title"
+                      placeholder="这篇笔记叫什么"
+                      @input="saving.touchedTitle = true"
+                    />
+                  </label>
                   <label class="ai-pick">
                     <span>落到</span>
                     <select v-model="saving.topicId">
@@ -325,15 +442,18 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                       </option>
                     </select>
                   </label>
-                  <label class="ai-pick">
-                    <span>加到这段</span>
-                    <select v-model="saving.section">
-                      <option v-for="s in SECTIONS" :key="s.id" :value="s.id">{{ s.title }}</option>
-                    </select>
-                  </label>
-                  <p class="ask-save-path">
-                    会拼到「{{ (SECTIONS.find((s) => s.id === saving.section) || SECTIONS[0]).title }}」这一段末尾
-                  </p>
+                  <template v-if="!saving.blocks?.length">
+                    <label class="ai-pick">
+                      <span>加到这段</span>
+                      <select v-model="saving.section">
+                        <option v-for="s in SECTIONS" :key="s.id" :value="s.id">{{ s.title }}</option>
+                      </select>
+                    </label>
+                    <p class="ask-save-path">
+                      会拼到「{{ (SECTIONS.find((s) => s.id === saving.section) || SECTIONS[0]).title }}」这一段末尾
+                    </p>
+                  </template>
+                  <p v-else class="ask-save-path">每块按内容自己找段落，插到对应小节末尾</p>
                 </template>
 
                 <label v-if="splitOutside(t.a).outside" class="ask-save-out">
@@ -341,10 +461,16 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   <span>也带上「库外」那段（AI 外推的，会标成待核对）</span>
                 </label>
                 <div class="ai-preview ask-save-pv">
-                  <BlockView v-for="b in savingBlocks" :key="b.id" :block="b" expand />
+                  <BlockView
+                    v-for="b in savingBlocks"
+                    :key="b.id"
+                    :block="b"
+                    expand
+                    @open-note="openCite"
+                  />
                 </div>
                 <div class="ai-acts">
-                  <button class="ai-primary" @click="doSave">
+                  <button class="ai-primary" :disabled="saving.analyzing" @click="doSave">
                     {{ saving.mode === 'exist' ? '写进这篇' : '写入新笔记' }}
                   </button>
                   <button @click="saving = null">取消</button>

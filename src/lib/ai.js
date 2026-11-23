@@ -329,7 +329,8 @@ export function assembleBlocks(blocks) {
   const out = []
   for (const sec of SECTIONS) {
     const items = blocks.filter((b) => (b.section || 'core') === sec.id)
-    if (!items.length && sec.id === 'todo') continue
+    // 空段落不生成标题：留着只有一行空 heading，读起来像没写完
+    if (!items.length) continue
     out.push({ id: hid(), type: 'heading', level: 2, text: sec.title })
     for (const b of items) out.push({ id: hid(), ...stripSection(b) })
   }
@@ -409,6 +410,105 @@ ${spec}
   const blocks = normalizeBlocks(data.blocks)
   if (!blocks.length) throw new Error('模型没给出可用内容，换个说法再试')
   return blocks
+}
+
+/* ---------- L2.5：一次问答 → 归档判断（新建 / 追加 + 分块） ---------- */
+
+const pathName = (topicId) => {
+  const names = []
+  let cur = state.topics.find((t) => t.id === topicId)
+  let guard = 0
+  while (cur && guard++ < 12) {
+    names.unshift(cur.name)
+    cur = cur.parentId ? state.topics.find((t) => t.id === cur.parentId) : null
+  }
+  return names.join(' / ')
+}
+
+// 给模型看的笔记摘要：段落标题 + 开头一句，够它判断「是不是同一个主题」
+function noteDigest(note) {
+  const blocks = note.blocks || []
+  const heads = blocks
+    .filter((b) => b.type === 'heading' && b.level === 2 && b.text)
+    .map((b) => b.text)
+  const lead = blocks.filter((b) => b.type !== 'heading').map(blockText).find(Boolean) || ''
+  return { heads, lead: lead.slice(0, 70) }
+}
+
+export async function fileAnswer({ question, answer, used = [], cfg } = {}) {
+  const notes = state.notes
+  const picked = []
+  const seen = new Set()
+  // 被引用过的笔记排前面：这次问答大概率跟它们同主题
+  for (const s of used) {
+    const n = notes.find((x) => x.id === s.id)
+    if (n && !seen.has(n.id)) {
+      seen.add(n.id)
+      picked.push(n)
+    }
+  }
+  for (const n of notes) {
+    if (picked.length >= 150) break
+    if (!seen.has(n.id)) {
+      seen.add(n.id)
+      picked.push(n)
+    }
+  }
+  const lines = picked.map((n) => {
+    const { heads, lead } = noteDigest(n)
+    const parts = [
+      n.id,
+      n.title,
+      pathName(n.topicId) || '未分类',
+      `段落：${heads.join('、') || '（还没分段）'}`,
+    ]
+    if (lead) parts.push(`开头：${lead}`)
+    return `- ${parts.join('｜')}`
+  })
+
+  const system = `你是数据分析面试知识库的归档助手。用户刚问了一个问题并拿到了回答，现在要把这次问答存进知识库。
+你要同时决定两件事：
+1. 该新建一篇笔记，还是追加进已有的某一篇。已有笔记讲的就是同一个主题就必须追加，别造重复笔记；主题确实不同才新建。
+2. 把回答重排成结构化知识块，按语义放对段落 —— 不要偷懒把整条答案原样塞进一张问答卡。
+${BLOCK_SPEC}
+${SECTION_SPEC}
+
+额外要求：
+- 回答里的 [1] [2] 这类引用编号原样保留，不要改号、不要新增；让它们落在 paragraph 的 text 或 qa 的 answer 里。
+- 除了「面试官会怎么问」那种一句话提问，其余内容都拆成 paragraph / definition / formula / bulletList / steps / comparison。
+- 只写回答里真有的信息，别补数字、论文名、案例；缺信息用 todo 占位。
+- target 为 exist 时，noteId 必须原样复制笔记列表里出现过的 id，段落优先沿用那篇笔记已有的段落标题。
+- target 为 new 时，topicId 必须原样复制分类树里出现过的 id；title 要短，不带书名号。
+- reason 用一句话说明为什么这么归类，会展示给用户看。
+
+只输出一个 JSON 对象：
+{"target":"new|exist","title":"...","topicId":"...","noteId":"...","section":"core|detail|qa|pitfall|todo","reason":"...","blocks":[{"type":"...","section":"...",...}]}`
+
+  const user = `分类树：\n${topicCatalog()}\n\n已有笔记（id｜标题｜位置｜段落｜开头）：\n${lines.join('\n') || '（还没有笔记）'}\n\n面试官会怎么问：\n${question}\n\n回答：\n${answer}`
+
+  const text = await chat(
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    { cfg, temperature: 0.2, maxTokens: 4000 },
+  )
+  const data = pickJson(text)
+  const blocks = normalizeBlocks(data.blocks)
+  if (!blocks.length) throw new Error('模型没切出可用的内容，重试一次')
+
+  const noteId = str(data.noteId)
+  const target = data.target === 'exist' && notes.some((n) => n.id === noteId) ? 'exist' : 'new'
+  const section = SECTIONS.some((s) => s.id === data.section) ? data.section : blocks[0].section || 'core'
+  return {
+    target,
+    title: str(data.title),
+    topicId: topicExists(data.topicId) ? data.topicId : fallbackTopicId(),
+    noteId: target === 'exist' ? noteId : '',
+    section,
+    reason: str(data.reason),
+    blocks,
+  }
 }
 
 // 设置页的连通性测试

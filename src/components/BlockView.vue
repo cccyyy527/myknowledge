@@ -35,21 +35,24 @@ const esc = (s) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 
-// 问答卡的答案正文里可能带 [1] [2]，存的时候把出处 id 一起记在 block.refs 里，
+// 答案正文里可能带 [1] [2]，存的时候把出处 id 一起记在 block.refs 里，
 // 这里再把它变回可点的引用 chip；没有 refs 的老笔记就当纯文本渲染
-const qaHtml = computed(() => {
-  const b = props.block
-  if (b.type !== 'qa') return ''
-  const refs = b.refs || []
-  let s = esc(b.answer || '')
-  if (refs.length) {
-    s = s.replace(/\[(\d+)\]/g, (m, d) => {
-      const r = refs[Number(d) - 1]
-      return r ? `<button class="qa-cite" data-note="${esc(r.id)}" title="${esc(r.title)}">${d}</button>` : m
-    })
-  }
-  return s
-})
+const citeHtml = (text, refs) => {
+  let s = esc(text || '')
+  if (!refs || !refs.length) return s
+  return s.replace(/\[(\d+)\]/g, (m, d) => {
+    const r = refs[Number(d) - 1]
+    return r ? `<button class="qa-cite" data-note="${esc(r.id)}" title="${esc(r.title)}">${d}</button>` : m
+  })
+}
+
+const qaHtml = computed(() =>
+  props.block.type === 'qa' ? citeHtml(props.block.answer, props.block.refs) : '',
+)
+
+const paraHtml = computed(() =>
+  props.block.type === 'paragraph' ? citeHtml(props.block.text, props.block.refs) : '',
+)
 
 const onQaClick = (e) => {
   const el = e.target.closest?.('.qa-cite')
@@ -61,7 +64,7 @@ const onQaClick = (e) => {
   <h2 v-if="block.type === 'heading' && block.level === 2" class="blk-h2">{{ block.text }}</h2>
   <h3 v-else-if="block.type === 'heading'" class="blk-h3">{{ block.text }}</h3>
 
-  <p v-else-if="block.type === 'paragraph'" class="blk-p">{{ block.text }}</p>
+  <p v-else-if="block.type === 'paragraph'" class="blk-p" @click="onQaClick" v-html="paraHtml"></p>
 
   <aside v-else-if="block.type === 'callout'" class="blk-callout" :class="'tone-' + (block.tone || 'tip')">
     <span class="callout-icon">{{ block.tone === 'warn' ? '!' : 'i' }}</span>

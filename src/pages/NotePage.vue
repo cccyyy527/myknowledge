@@ -448,9 +448,6 @@ const openRef = (id) => {
         </button>
         <button class="btn-ghost danger" @click="del">删除</button>
       </div>
-      <p v-if="mode !== 'edit'" class="dbl-tip">
-        {{ isTouch ? '点每块右上角的 ✎ 就能改那一块' : '双击正文里任意一块，直接改那一块' }}
-      </p>
     </div>
 
     <p class="note-meta">
@@ -539,7 +536,6 @@ const openRef = (id) => {
         class="rd-block"
         :class="{ 'is-touch': isTouch }"
         :data-bid="b.id"
-        :title="isTouch ? '点右上角 ✎ 改这一块' : '双击改这一块'"
         @dblclick="editAt(b.id)"
       >
         <BlockView :block="b" @open-note="openRef" />

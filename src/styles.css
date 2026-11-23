@@ -372,7 +372,6 @@ code { font-family: var(--mono); font-size: 0.9em; }
   -webkit-tap-highlight-color: transparent;
 }
 .rd-edit:active { opacity: 1; color: var(--ink); border-color: #cfcdc7; background: #f6f4ef; }
-.dbl-tip { flex: 1 1 100%; font-size: 11.5px; color: var(--ink-3); margin: 6px 0 0; }
 
 /* ---------- aggregate ---------- */
 .agg-list { display: flex; flex-direction: column; gap: 9px; }

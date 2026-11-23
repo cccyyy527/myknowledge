@@ -71,8 +71,9 @@ export const noteIsEmpty = (note) =>
   !(note.blocks || []).some((b) => b.type !== 'heading' && blockText(b).trim())
 
 // 给模型看的正文：按小节分段，空笔记直接说清楚是空的，
-// 免得模型把「标题占了关键词」当成「这篇里有内容」
-export function noteText(note, { budget = 7000 } = {}) {
+// 免得模型把「标题占了关键词」当成「这篇里有内容」。
+// ids 给 agent 的 read_note 用：每块前面标上块 id，改已有内容的提案要拿它当靶子。
+export function noteText(note, { budget = 7000, ids = false } = {}) {
   const path = topicPath(note.topicId).map((t) => t.name).join(' / ')
   const lines = [`《${note.title}》　位置：${path || '未归类'}`]
   if (note.tags?.length) lines.push(`标签：${note.tags.join('、')}`)
@@ -82,13 +83,14 @@ export function noteText(note, { budget = 7000 } = {}) {
   for (const b of note.blocks || []) {
     if (b.type === 'heading') {
       sec = b.text || ''
+      if (ids) lines.push(`## ${sec}　[#${b.id}]`)
       continue
     }
     const t = blockText(b).trim()
     if (!t) continue
     wrote = true
     const at = sec ? `${b.type} · ${sec}` : b.type
-    lines.push(`- (${at}) ${t}`)
+    lines.push(ids ? `- [#${b.id}] (${at}) ${t}` : `- (${at}) ${t}`)
   }
   if (!wrote) lines.push('（这篇只有小节标题，正文还是空的）')
   const text = lines.join('\n')

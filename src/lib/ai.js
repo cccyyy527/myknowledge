@@ -308,6 +308,67 @@ export const stripSection = (b) => {
   return rest
 }
 
+/* ---------- 改已有块：按块 id 改写 / 删除 / 就地插入 ---------- */
+
+// 模型给的补丁 → 一个完整的新块；老块的 id 和类型默认继承
+function blockFromPatch(raw, old, isNew) {
+  const type = old.type === 'heading' ? 'heading' : VALID.has(raw.type) ? raw.type : old.type
+  if (type === 'image' || type === 'divider') return null
+  const id = isNew ? bid() : old.id
+  if (type === 'heading') {
+    const text = cutMark(raw.text)
+    return text ? { id, type, level: old.level === 3 ? 3 : 2, text } : null
+  }
+  const section = SECTIONS.some((s) => s.id === raw.section)
+    ? raw.section
+    : SECTIONS.some((s) => s.id === old.section)
+      ? old.section
+      : 'core'
+  const [nb] = normalizeBlocks([{ ...raw, type, section }])
+  return nb ? { ...nb, id } : null
+}
+
+// 算出改动后的块数组，原笔记不动；改不动的写进 skipped 让模型/用户知道
+export function planEdits(note, edits) {
+  const blocks = (note.blocks || []).map((b) => ({ ...b }))
+  const changed = []
+  const skipped = []
+  for (const raw of arr(edits)) {
+    if (!raw || typeof raw !== 'object') continue
+    const op = raw.op === 'insert' ? 'insert' : raw.op === 'remove' ? 'remove' : 'replace'
+    const targetId = str(op === 'insert' ? raw.afterBlockId : raw.blockId)
+    const at = blocks.findIndex((b) => b.id === targetId)
+    if (at < 0) {
+      skipped.push({ op, id: targetId, why: '这篇里没有这个块 id' })
+      continue
+    }
+    const old = blocks[at]
+    if (op === 'remove') {
+      blocks.splice(at, 1)
+      changed.push({ op, blockId: old.id, before: old, after: null, why: str(raw.why) })
+      continue
+    }
+    const nb = blockFromPatch(raw, old, op === 'insert')
+    if (!nb) {
+      skipped.push({ op, id: targetId, why: '内容为空或这种块不支持自动改' })
+      continue
+    }
+    if (op === 'insert') {
+      blocks.splice(at + 1, 0, nb)
+      changed.push({ op, blockId: nb.id, afterBlockId: old.id, before: null, after: nb, why: str(raw.why) })
+      continue
+    }
+    const same = JSON.stringify(stripSection(old)) === JSON.stringify(stripSection(nb))
+    if (same) {
+      skipped.push({ op, id: targetId, why: '和原来一样，没改动' })
+      continue
+    }
+    blocks[at] = nb
+    changed.push({ op, blockId: old.id, before: old, after: nb, why: str(raw.why) })
+  }
+  return { blocks, changed, skipped }
+}
+
 /* ---------- L2：一段乱笔记 → 分类 + 分块 + 归段 ---------- */
 
 export async function composeNote(raw, cfg) {
@@ -605,6 +666,50 @@ export const MAX_ROUNDS = 6
 
 const SECTION_IDS = ['core', 'detail', 'qa', 'pitfall', 'todo']
 
+// 块的字段形状：blocks 和 edits 共用一份，别让两边漂走
+const BLOCK_SCHEMA = {
+  type: 'object',
+  properties: {
+    type: {
+      type: 'string',
+      enum: [
+        'paragraph',
+        'definition',
+        'formula',
+        'comparison',
+        'qa',
+        'pitfall',
+        'steps',
+        'callout',
+        'bulletList',
+        'code',
+        'todo',
+      ],
+    },
+    section: { type: 'string', enum: SECTION_IDS },
+    text: { type: 'string' },
+    term: { type: 'string' },
+    detail: { type: 'string' },
+    latex: { type: 'string' },
+    question: { type: 'string' },
+    answer: { type: 'string' },
+    cause: { type: 'string' },
+    avoid: { type: 'string' },
+    left: { type: 'string' },
+    right: { type: 'string' },
+    tone: { type: 'string', enum: ['tip', 'warn'] },
+    items: { type: 'array', items: { type: 'string' } },
+    rows: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { k: { type: 'string' }, a: { type: 'string' }, b: { type: 'string' } },
+      },
+    },
+  },
+  required: ['type', 'section'],
+}
+
 export const TOOLS = [
   {
     type: 'function',
@@ -627,7 +732,7 @@ export const TOOLS = [
     function: {
       name: 'read_note',
       description:
-        '读一篇笔记的完整正文（按小节分）。标题看起来对口时一定要读，不要只凭标题判断里面写了什么。',
+        '读一篇笔记的完整正文（按小节分，每块前面带 [#块id]）。标题看起来对口时一定要读，不要只凭标题判断里面写了什么。要改已有内容时，块 id 就是改的目标。',
       parameters: {
         type: 'object',
         properties: { id: { type: 'string', description: 'search_notes 返回的 id' } },
@@ -648,18 +753,19 @@ export const TOOLS = [
     function: {
       name: 'save_note',
       description:
-        '提交一份归档提案（不会直接写盘，用户要确认）。只有用户让你存成笔记时才调用。',
+        '提交一份归档提案（不会直接写盘，用户要确认）。只有用户让你存成笔记、或让你改已有笔记时才调用。',
       parameters: {
         type: 'object',
         properties: {
           mode: {
             type: 'string',
-            enum: ['new', 'exist'],
-            description: '新建一篇填 new，追加进已有笔记填 exist',
+            enum: ['new', 'exist', 'edit'],
+            description:
+              'new 新建一篇；exist 往已有笔记对应小节末尾追加新块；edit 改已有笔记里具体的块（改写 / 删除 / 就地插入）',
           },
           noteId: {
             type: 'string',
-            description: 'mode=exist 时必填，必须在 search_notes / read_note 里出现过',
+            description: 'mode=exist / edit 时必填，必须在 search_notes / read_note 里出现过',
           },
           topicId: { type: 'string', description: 'mode=new 时必填，取自 list_topics' },
           title: { type: 'string', description: 'mode=new 时的笔记标题，要短，不带书名号' },
@@ -671,52 +777,31 @@ export const TOOLS = [
           reason: { type: 'string', description: '一句话说明为什么这么归档，会展示给用户看' },
           blocks: {
             type: 'array',
-            description: '内容块，每块按语义放对 section',
+            description: 'mode=new / exist 时的内容块，每块按语义放对 section',
+            items: BLOCK_SCHEMA,
+          },
+          edits: {
+            type: 'array',
+            description:
+              'mode=edit 时的改动列表。块 id 取自 read_note 输出里的 [#块id]，不要自己编。旧的结论过时就用 replace 改写，写错了就用 remove 删，缺一句就用 insert 就地补。',
             items: {
               type: 'object',
               properties: {
-                type: {
+                op: {
                   type: 'string',
-                  enum: [
-                    'paragraph',
-                    'definition',
-                    'formula',
-                    'comparison',
-                    'qa',
-                    'pitfall',
-                    'steps',
-                    'callout',
-                    'bulletList',
-                    'code',
-                    'todo',
-                  ],
+                  enum: ['replace', 'remove', 'insert'],
+                  description: 'replace 整块改写（要给全该块内容）；remove 删除该块；insert 在目标块后面插一块新的',
                 },
-                section: { type: 'string', enum: SECTION_IDS },
-                text: { type: 'string' },
-                term: { type: 'string' },
-                detail: { type: 'string' },
-                latex: { type: 'string' },
-                question: { type: 'string' },
-                answer: { type: 'string' },
-                cause: { type: 'string' },
-                avoid: { type: 'string' },
-                left: { type: 'string' },
-                right: { type: 'string' },
-                tone: { type: 'string', enum: ['tip', 'warn'] },
-                items: { type: 'array', items: { type: 'string' } },
-                rows: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: { k: { type: 'string' }, a: { type: 'string' }, b: { type: 'string' } },
-                  },
-                },
+                blockId: { type: 'string', description: 'op=replace / remove 时必填，目标是哪一块' },
+                afterBlockId: { type: 'string', description: 'op=insert 时必填，插在这一块后面' },
+                why: { type: 'string', description: '一句话说明这块为什么要改，会展示给用户看' },
+                ...BLOCK_SCHEMA.properties,
               },
-              required: ['type', 'section'],
+              required: ['op'],
             },
           },
         },
-        required: ['mode', 'reason', 'blocks'],
+        required: ['mode', 'reason'],
       },
     },
   },
@@ -842,7 +927,7 @@ function runTool(ctx, call) {
     const n = citeIndex(ctx, note)
     const empty = noteIsEmpty(note)
     return {
-      content: `[${n}] ${noteText(note)}`,
+      content: `[${n}] ${noteText(note, { ids: true })}`,
       summary: `📖 读《${note.title}》→ ${empty ? '空笔记' : '正文'} `,
     }
   }
@@ -852,6 +937,41 @@ function runTool(ctx, call) {
   }
 
   if (name === 'save_note') {
+    const note = state.notes.find((x) => x.id === str(args.noteId))
+
+    // 改已有块：模型必须拿 read_note 给的块 id 当靶子，对不上的直接丢掉
+    if (args.mode === 'edit') {
+      if (!note) {
+        return {
+          content: `noteId「${str(args.noteId)}」对不上任何笔记。改已有笔记前先 search_notes 找到它、read_note 读出块 id，再提交。`,
+          summary: '🗂 提案无效（noteId 不对）',
+        }
+      }
+      const plan = planEdits(note, args.edits)
+      if (!plan.changed.length) {
+        const miss = plan.skipped.map((x) => `${x.op} ${x.id || '（没给 id）'}`).join('、')
+        return {
+          content: `没有一条改动对得上《${note.title}》里的块（${miss || 'edits 是空的'}）。块 id 只能取自 read_note 输出里的 [#块id]，不要自己编；先 read_note 再改。`,
+          summary: '🗂 提案无效（块 id 对不上）',
+        }
+      }
+      ctx.proposal = {
+        target: 'edit',
+        noteId: note.id,
+        noteTitle: note.title,
+        reason: stripMark(str(args.reason)),
+        edits: plan.changed,
+        blocks: plan.blocks,
+        skipped: plan.skipped,
+      }
+      const n = plan.changed.length
+      const drop = plan.skipped.length ? `，另有 ${plan.skipped.length} 处对不上被丢掉` : ''
+      return {
+        content: `提案已记录：改《${note.title}》${n} 处${drop}。用户会看到改动前后的对照，可以改也可以取消——不要再提交一遍，也不要在正文里复述。`,
+        summary: `🗂 改《${note.title}》${n} 处`,
+      }
+    }
+
     const blocks = normalizeBlocks(args.blocks)
     if (!blocks.length) {
       return {
@@ -859,21 +979,21 @@ function runTool(ctx, call) {
         summary: '🗂 提案无效（blocks 为空）',
       }
     }
-    const note = state.notes.find((x) => x.id === str(args.noteId))
-    const mode = args.mode === 'exist' && note ? 'exist' : 'new'
-    const topicId = mode === 'exist' ? note.topicId : topicExists(args.topicId) ? args.topicId : fallbackTopicId()
+    const oldNote = state.notes.find((x) => x.id === str(args.noteId))
+    const mode = args.mode === 'exist' && oldNote ? 'exist' : 'new'
+    const topicId = mode === 'exist' ? oldNote.topicId : topicExists(args.topicId) ? args.topicId : fallbackTopicId()
     ctx.proposal = {
       target: mode,
       title: str(args.title),
       topicId,
-      noteId: mode === 'exist' ? note.id : '',
+      noteId: mode === 'exist' ? oldNote.id : '',
       section: SECTIONS.some((s) => s.id === args.section) ? args.section : blocks[0].section || 'core',
-      reason: str(args.reason),
+      reason: stripMark(str(args.reason)),
       blocks,
     }
     const where =
       mode === 'exist'
-        ? `写进《${note.title}》${blocks.length} 块`
+        ? `写进《${oldNote.title}》${blocks.length} 块`
         : `新建《${str(args.title) || '未命名'}》${blocks.length} 块`
     return {
       content: `提案已记录：${where}。用户可以改也可以取消——不要再提交一遍，也不要在正文里复述这些块。`,
@@ -948,8 +1068,9 @@ const AGENT_ANSWER = `
 - 用户问「有哪些 / 列一下」时，把查到的都列出来，一条一行，每条带 [n]。
 - 库里另有笔记专门讲这件事时，用 [[那篇的完整标题]] 指过去（标题必须和工具返回的完全一致），别把整篇内容抄过来。
 - 笔记之间说法冲突时，指出是哪两篇、各自怎么写，别替他打圆场。
-- 回答里除了 [n] 和 [[标题]]，不要再出现别的方括号标记、标签或前缀。
-- 除非用户明确让你存成笔记，否则不要调用 save_note。`
+- 用户问的这件事如果正好是某篇里某一段写错了、写漏了，直接说清是哪一篇哪一块该怎么改；他让你改的时候用 save_note 的 mode=edit 提改动。
+- 除了 [n] 和 [[标题]]，不要再出现别的方括号标记、标签或前缀。
+- 除非用户明确让你存成笔记或改笔记，否则不要调用 save_note。`
 
 const AGENT_STRICT = `${AGENT_RULES}
 
@@ -971,11 +1092,13 @@ export function askAgent({ question, history = [], cfg, strict = false, ...rest 
 
 const ARCHIVE_NUDGE = `把上面这轮问答存进知识库：
 - 先 search_notes 查有没有同主题的笔记。空骨架的也算同主题，内容直接填进那篇，不要另建重复的。
-- 需要的话 read_note 看它已有的小节标题，好把内容插对地方。
-- 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason、blocks。
+- 需要的话 read_note 看它已有的小节和块 id。
+- 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason，以及 blocks 或 edits。
+- 这轮回答如果是在纠正、补充、更新已有块里的说法，用 mode=edit：edits 里逐条写 op（replace 整块改写 / remove 删除 / insert 在目标块后就地插一块），blockId 取自 read_note 的 [#块id]，块内容要给全。
+- 纯粹是新内容才用 mode=exist 往小节末尾追加 blocks。
 - blocks 要按语义分块（paragraph / definition / formula / qa / pitfall / steps / comparison），别把整篇答案塞进一张问答卡。
 - 回答里的 [1] [2] 这些编号原样保留。
-- blocks 里只写库内已有的内容：不要出现「${OUTSIDE_MARK}」这类标记，也不要写别的方括号标签或前缀；没有笔记依据的通用知识、通用数字一律不要放进 blocks。
+- blocks / edits 里只写库内已有的内容：不要出现「${OUTSIDE_MARK}」这类标记，也不要写别的方括号标签或前缀；没有笔记依据的通用知识、通用数字一律不要写进去。
 - 内容牵涉库里别的笔记时，写 [[那篇的完整标题]]，标题必须和工具返回的一字不差；不确定就不写。
 - 这里的回答是给归档器看的，不用长篇解释；提案提交完说一句归档到哪了就停。`
 

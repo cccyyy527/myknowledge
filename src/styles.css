@@ -795,6 +795,30 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .ask-save-mode button:disabled { opacity: 0.45; cursor: default; }
 
+/* AI 就地改块：旧 → 新 对照 */
+.ask-edits {
+  margin-top: 8px; max-height: 30vh; overflow: auto;
+  border: 1px solid var(--line); border-radius: 8px; background: #fcfbf9;
+}
+.ask-edit { padding: 8px 10px; border-top: 1px dashed var(--line); }
+.ask-edit:first-child { border-top: 0; }
+.ask-edit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+.ask-edit-op {
+  flex: none; font-size: 10.5px; line-height: 1.5; padding: 0 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+}
+.ask-edit-op.remove { background: #fdeceb; color: #b3261e; }
+.ask-edit-op.insert { background: #eaf4ec; color: #2e6b3a; }
+.ask-edit-at, .ask-edit-why { font-size: 11px; line-height: 1.6; color: var(--ink-3); }
+.ask-edit-before {
+  padding: 2px 8px; border-left: 2px solid var(--line); opacity: 0.62;
+  font-size: 12px; color: var(--ink-3);
+}
+.ask-edit-before.gone { text-decoration: line-through; text-decoration-color: #b3261e; }
+.ask-edit-before .blk { margin: 4px 0; }
+.ask-edit-after { padding: 2px 0 0; font-size: 12.5px; }
+.ask-edit-after .blk { margin: 4px 0; }
+
 /* 设置里的分节标题 */
 .ai-sub {
   margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--line);

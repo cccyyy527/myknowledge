@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, stripMark, SECTIONS } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
@@ -24,8 +24,22 @@ const SUGGEST = [
   '我还有哪些没查清的地方？',
 ]
 
+// 对话记录落 localStorage：关掉面板、刷新页面再打开，模型还记得刚才聊过什么、读过哪几块
+const LOG_KEY = 'myknowledge.asklog'
+const LOG_MAX = 10
+
+const loadLog = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LOG_KEY) || '[]')
+    if (!Array.isArray(raw)) return []
+    return raw.slice(-LOG_MAX).map((t) => ({ ...t, streaming: false, trace: [] }))
+  } catch {
+    return []
+  }
+}
+
 const input = ref('')
-const turns = ref([])
+const turns = ref(loadLog())
 const busy = ref(false)
 const box = ref(null)
 let ctrl = null
@@ -58,6 +72,59 @@ const scroll = async () => {
   if (box.value) box.value.scrollTop = box.value.scrollHeight
 }
 
+// messages 里有工具回包，体积能到几百 KB，超配额就逐级瘦身
+let logTimer = 0
+const capContent = (list, n) =>
+  (list || []).map((m) =>
+    typeof m.content === 'string' && m.content.length > n
+      ? { ...m, content: m.content.slice(0, n) + '\n…（已截断）' }
+      : m,
+  )
+
+const writeLog = (list) => {
+  try {
+    localStorage.setItem(LOG_KEY, JSON.stringify(list))
+    return
+  } catch {}
+  try {
+    localStorage.setItem(
+      LOG_KEY,
+      JSON.stringify(list.map((t) => ({ ...t, messages: capContent(t.messages, 4000) }))),
+    )
+    return
+  } catch {}
+  try {
+    localStorage.setItem(LOG_KEY, JSON.stringify(list.map((t) => ({ ...t, messages: null }))))
+  } catch {}
+}
+
+const saveLog = () => {
+  clearTimeout(logTimer)
+  logTimer = setTimeout(() => {
+    writeLog(
+      turns.value.slice(-LOG_MAX).map((t) => ({
+        q: t.q,
+        a: t.a,
+        used: t.used || [],
+        strict: t.strict,
+        fallback: t.fallback,
+        err: t.err || '',
+        messages: t.messages || null,
+        at: t.at || 0,
+      })),
+    )
+  }, 500)
+}
+
+const clearLog = () => {
+  clearTimeout(logTimer)
+  try {
+    localStorage.removeItem(LOG_KEY)
+  } catch {}
+}
+
+onMounted(scroll)
+
 const ask = async (preset) => {
   const q = String(preset ?? input.value).trim()
   if (!q || busy.value) return
@@ -81,6 +148,7 @@ const ask = async (preset) => {
     fallback: false,
     strict: strict.value,
     messages: null,
+    at: Date.now(),
   })
   const turn = turns.value[turns.value.length - 1]
   busy.value = true
@@ -144,6 +212,7 @@ const ask = async (preset) => {
     turn.streaming = false
     busy.value = false
     ctrl = null
+    saveLog()
     scroll()
   }
 }
@@ -154,6 +223,7 @@ const reset = () => {
   if (busy.value) return
   turns.value = []
   saving.value = null
+  clearLog()
 }
 
 const jump = (id) => {
@@ -219,6 +289,32 @@ const groups = computed(() =>
 // 写进已有笔记时按标题选，顺序和笔记里的段落一致
 const savingTurn = computed(() => (saving.value ? turns.value[saving.value.idx] : null))
 
+// 拿块的首句当标签，用来告诉用户「插在哪块后面」
+function labelOf(noteId, blockId) {
+  const note = state.notes.find((n) => n.id === noteId)
+  const b = note?.blocks?.find((x) => x.id === blockId)
+  if (!b) return ''
+  const raw = b.text || b.term || b.question || b.items?.[0] || b.latex || ''
+  const t = stripMark(String(raw)).replace(/\s+/g, ' ').trim()
+  return t.length > 18 ? t.slice(0, 18) + '…' : t
+}
+
+// 改已有块时按条目渲染「旧 → 新」对照
+const editPlan = computed(() => {
+  const s = saving.value
+  if (!s || s.mode !== 'edit' || !s.edits?.length) return []
+  return s.edits.map((e, i) => ({
+    key: `ed${i}`,
+    op: e.op,
+    why: e.why,
+    before: e.before,
+    after: e.after,
+    afterTitle: e.op === 'insert' ? labelOf(s.noteId, e.afterBlockId) : '',
+  }))
+})
+
+const OP_TEXT = { replace: '改写', remove: '删除', insert: '就地插入' }
+
 // 只列有笔记的分类，空的太多了没法选
 const noteOptions = computed(() =>
   state.notes.map((n) => ({
@@ -229,6 +325,11 @@ const noteOptions = computed(() =>
 )
 
 const OUTSIDE_HEAD = 'AI 补充（待核对）'
+
+// 改已有块时预览头里要显示改的是哪一篇
+const editingNote = computed(() =>
+  saving.value ? state.notes.find((n) => n.id === saving.value.noteId) : null,
+)
 
 const blankTitle = (q) => (q.length > 38 ? q.slice(0, 38) + '…' : q)
 
@@ -345,8 +446,17 @@ const analyze = async (idx) => {
       })
     }
     if (saving.value !== s) return
-    s.blocks = r.blocks
     s.reason = stripMark(r.reason)
+    if (r.target === 'edit') {
+      s.mode = 'edit'
+      s.noteId = r.noteId
+      s.blocks = null
+      s.edits = r.edits || []
+      s.plan = r.blocks || []
+      s.skipped = r.skipped || []
+      return
+    }
+    s.blocks = r.blocks
     s.mode = r.target
     s.section = r.section
     if (r.target === 'exist') s.noteId = r.noteId
@@ -375,6 +485,9 @@ const openSave = (idx) => {
     outside: false,
     title: blankTitle(t.q),
     blocks: null,
+    edits: [],
+    plan: null,
+    skipped: [],
     reason: '',
     analyzing: false,
     err: '',
@@ -403,6 +516,18 @@ const doSave = () => {
       return { id: newBlockId(), ...rest }
     })
   const tail = clean(outsideBlocks.value)
+
+  if (s.mode === 'edit') {
+    const note = state.notes.find((n) => n.id === s.noteId)
+    if (!note || !s.plan?.length) return
+    note.blocks = s.plan
+    if (tail.length) insertBlocks(note, OUTSIDE_HEAD, tail)
+    touchNote(note)
+    saving.value = null
+    emit('close')
+    router.push(`/n/${note.id}`)
+    return
+  }
 
   if (s.mode === 'exist') {
     const note = state.notes.find((n) => n.id === s.noteId)
@@ -512,7 +637,39 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   >
                     写进已有笔记
                   </button>
+                  <button
+                    v-if="saving.plan"
+                    :class="{ on: saving.mode === 'edit' }"
+                    @click="saving.mode = 'edit'"
+                  >
+                    改已有内容
+                  </button>
                 </div>
+
+                <template v-if="saving.mode === 'edit'">
+                  <p class="ask-save-path">
+                    改《{{ editingNote?.title || '这篇' }}》{{ editPlan.length }} 处<span
+                      v-if="saving.skipped?.length"
+                    >
+                      ，另有 {{ saving.skipped.length }} 处对不上被丢掉</span
+                    >
+                  </p>
+                  <div class="ask-edits">
+                    <div v-for="e in editPlan" :key="e.key" class="ask-edit">
+                      <div class="ask-edit-head">
+                        <span class="ask-edit-op" :class="e.op">{{ OP_TEXT[e.op] || e.op }}</span>
+                        <span v-if="e.afterTitle" class="ask-edit-at">插在「{{ e.afterTitle }}」后面</span>
+                        <span v-if="e.why" class="ask-edit-why">{{ e.why }}</span>
+                      </div>
+                      <div v-if="e.before" class="ask-edit-before" :class="{ gone: e.op === 'remove' }">
+                        <BlockView :block="e.before" expand />
+                      </div>
+                      <div v-if="e.after" class="ask-edit-after">
+                        <BlockView :block="e.after" expand @open-note="openCite" />
+                      </div>
+                    </div>
+                  </div>
+                </template>
 
                 <template v-if="saving.mode === 'new'">
                   <label class="ai-pick">
@@ -537,7 +694,7 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   <p class="ask-save-path">{{ pathOf(saving.topicId) }}</p>
                 </template>
 
-                <template v-else>
+                <template v-else-if="saving.mode === 'exist'">
                   <label class="ai-pick">
                     <span>写进</span>
                     <select v-model="saving.noteId">
@@ -564,7 +721,7 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   <input type="checkbox" v-model="saving.outside" />
                   <span>也带上「AI 补充」那段（不是你笔记里的内容，会标成待核对）</span>
                 </label>
-                <div class="ai-preview ask-save-pv">
+                <div v-if="saving.mode !== 'edit'" class="ai-preview ask-save-pv">
                   <BlockView
                     v-for="b in savingBlocks"
                     :key="b.id"
@@ -574,8 +731,12 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                   />
                 </div>
                 <div class="ai-acts">
-                  <button class="ai-primary" :disabled="saving.analyzing" @click="doSave">
-                    {{ saving.mode === 'exist' ? '写进这篇' : '写入新笔记' }}
+                  <button
+                    class="ai-primary"
+                    :disabled="saving.analyzing || (saving.mode === 'edit' && !editPlan.length)"
+                    @click="doSave"
+                  >
+                    {{ saving.mode === 'edit' ? '应用改动' : saving.mode === 'exist' ? '写进这篇' : '写入新笔记' }}
                   </button>
                   <button @click="saving = null">取消</button>
                 </div>

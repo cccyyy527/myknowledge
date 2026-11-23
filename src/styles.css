@@ -677,6 +677,29 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .ai-ask button:disabled { opacity: 0.5; cursor: default; }
 .ai-msg.bad { color: #a33; }
 .ai-hint { font-size: 12px; line-height: 1.7; color: var(--ink-3); margin: 10px 0 0; }
+.ai-hint-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.ai-hint-bar > span:first-child { flex: 1 1 auto; min-width: 200px; }
+.ai-bulk { display: inline-flex; gap: 6px; flex: none; margin-left: auto; }
+.ai-bulk-btn {
+  font-size: 11.5px;
+  line-height: 1.6;
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ai-bulk-btn:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
+.ai-bulk-btn.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.ai-bulk-btn:disabled { opacity: 0.45; cursor: default; }
 .ai-hint code { font-family: var(--mono); font-size: 11.5px; background: #f6f5f3; padding: 1px 5px; border-radius: 4px; }
 .ai-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
 .ai-row span { width: 62px; flex: none; font-size: 12.5px; color: var(--ink-2); }

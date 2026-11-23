@@ -81,6 +81,11 @@ const counts = computed(() => {
   return c
 })
 
+// 可以勾的只有改/新/删；keep 是原样留住的块，没有勾选框
+const pickable = computed(() => rows.value.filter((r) => r.op !== 'keep'))
+const unchecked = computed(() => pickable.value.filter((r) => !r.checked).length)
+const setAll = (v) => pickable.value.forEach((r) => (r.checked = v))
+
 const apply = () => {
   if (!props.note || !rows.value.length) return
   if (titleHint.value) props.note.title = titleHint.value
@@ -100,7 +105,8 @@ const apply = () => {
       </div>
 
       <p class="ai-tip">
-        说一句要怎么改，AI 把这篇当一份稿子重排。改动会先列出来（改 / 新 / 删），你勾哪些就写哪些。
+        说一句要怎么改，AI 把这篇当一份稿子重排。改动会先列出来（改 / 新 / 删），你勾哪些就写哪些；
+        懒得逐个勾就点「全部接受」（删除默认不勾，抹内容得自己点一下）。
         段落标题由程序按「核心结论 / 推导 / 高频问法 / 坑 / 待补」重新生成，你自己加的小节会被并回去。
       </p>
 
@@ -141,11 +147,27 @@ const apply = () => {
       <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
 
       <template v-if="rows.length">
-        <p class="ai-hint">
-          共 {{ rows.length }} 块 —— 改 {{ counts.replace }} / 新 {{ counts.add }} / 删
-          {{ counts.drop }}，勾上的才写进去。
-          <template v-if="titleHint">标题会改成「{{ titleHint }}」。</template>
-        </p>
+        <div class="ai-hint ai-hint-bar">
+          <span>
+            共 {{ rows.length }} 块 —— 改 {{ counts.replace }} / 新 {{ counts.add }} / 删
+            {{ counts.drop }}，勾上的才写进去。
+            <template v-if="titleHint">标题会改成「{{ titleHint }}」。</template>
+            <template v-if="unchecked">还有 {{ unchecked }} 处没勾。</template>
+          </span>
+          <span class="ai-bulk">
+            <button
+              class="ai-bulk-btn"
+              :class="{ on: !unchecked }"
+              :disabled="!pickable.length"
+              @click="setAll(true)"
+            >
+              全部接受
+            </button>
+            <button class="ai-bulk-btn" :disabled="!pickable.length" @click="setAll(false)">
+              全部不选
+            </button>
+          </span>
+        </div>
 
         <div class="ai-preview ai-diff">
           <div v-for="(r, i) in rows" :key="i" class="df-row" :class="'df-' + r.op">

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { loadAI, isAiReady, reviseNote, applyOps, SECTIONS } from '../lib/ai.js'
+import { loadAI, isAiReady, reviseNote, applyOps, diagnose, SECTIONS } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
 
 const props = defineProps({
@@ -10,6 +10,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'applied'])
 
 const PRESETS = [
+  '梳理结构：放错段的块挪回去，重复的合并掉',
   '核心结论拆成 2-3 条，每条一句断言',
   '每个公式后面补一句「为什么是这个式子」',
   '把段落里藏着的东西抽成概念卡',
@@ -37,6 +38,7 @@ watch(
     cfg.value = loadAI()
     rows.value = []
     titleHint.value = ''
+    showKeep.value = false
     say('')
     if (!isAiReady(cfg.value)) say('还没配 API Key，先在顶栏 ✨ → 设置 里填一下', true)
   },
@@ -52,9 +54,12 @@ const customSecs = computed(() => {
     .map((b) => b.text)
 })
 
+// 结构诊断：面板上先给用户看一遍「哪里歪了」，也顺便解释 AI 动手的依据
+const diag = computed(() => (props.note ? diagnose(props.note) : null))
+
 // 改动和新增默认勾上，删除默认不勾 —— 抹内容得人手点一下
 const decorate = (ops) =>
-  ops.map((o) => ({ ...o, checked: o.op === 'replace' || o.op === 'add' }))
+  ops.map((o) => ({ ...o, checked: o.op === 'replace' || o.op === 'add' || o.op === 'move' }))
 
 const run = async (preset) => {
   const ins = String(preset ?? instruction.value).trim()
@@ -76,15 +81,21 @@ const run = async (preset) => {
 }
 
 const counts = computed(() => {
-  const c = { replace: 0, add: 0, drop: 0 }
+  const c = { keep: 0, move: 0, replace: 0, add: 0, drop: 0 }
   for (const r of rows.value) if (r.op in c) c[r.op]++
   return c
 })
 
-// 可以勾的只有改/新/删；keep 是原样留住的块，没有勾选框
+// 未改动的块默认折起来：一笔记几十块，全铺开就看不见真正改了哪几处
+const showKeep = ref(false)
+const visibleRows = computed(() => (showKeep.value ? rows.value : rows.value.filter((r) => r.op !== 'keep')))
+
+// 可以勾的只有挪/改/新/删；keep 是原样留住的块，没有勾选框
 const pickable = computed(() => rows.value.filter((r) => r.op !== 'keep'))
 const unchecked = computed(() => pickable.value.filter((r) => !r.checked).length)
 const setAll = (v) => pickable.value.forEach((r) => (r.checked = v))
+
+const secName = (id) => (SECTIONS.find((s) => s.id === id) || SECTIONS[0]).title
 
 const apply = () => {
   if (!props.note || !rows.value.length) return
@@ -105,9 +116,20 @@ const apply = () => {
       </div>
 
       <p class="ai-tip">
-        说一句要怎么改，AI 把这篇当一份稿子重排。改动会先列出来（改 / 新 / 删），你勾哪些就写哪些；
+        说一句要怎么改，AI 把这篇当一份稿子重排。改动会先列出来（挪 / 改 / 新 / 删），你勾哪些就写哪些；
         懒得逐个勾就点「全部接受」（删除默认不勾，抹内容得自己点一下）。
         段落标题由程序按「核心结论 / 推导 / 高频问法 / 坑 / 待补」重新生成，你自己加的小节会被并回去。
+      </p>
+
+      <div v-if="diag && diag.total" class="ai-struct">
+        <span v-for="s in diag.sections" :key="s.id" class="st-seg" :class="{ empty: !s.count }">
+          {{ s.title }}<i class="st-n">{{ s.count }}</i>
+        </span>
+      </div>
+      <p v-if="diag && diag.flags.length" class="ai-tip st-flag">
+        {{ diag.flags.slice(0, 2).join('；') }}<template v-if="diag.flags.length > 2"
+          >；另有 {{ diag.flags.length - 2 }} 处</template
+        >
       </p>
 
       <textarea
@@ -149,8 +171,8 @@ const apply = () => {
       <template v-if="rows.length">
         <div class="ai-hint ai-hint-bar">
           <span>
-            共 {{ rows.length }} 块 —— 改 {{ counts.replace }} / 新 {{ counts.add }} / 删
-            {{ counts.drop }}，勾上的才写进去。
+            共 {{ rows.length }} 块 —— 挪 {{ counts.move }} / 改 {{ counts.replace }} / 新
+            {{ counts.add }} / 删 {{ counts.drop }} / 留 {{ counts.keep }}，勾上的才写进去。
             <template v-if="titleHint">标题会改成「{{ titleHint }}」。</template>
             <template v-if="unchecked">还有 {{ unchecked }} 处没勾。</template>
           </span>
@@ -169,16 +191,26 @@ const apply = () => {
           </span>
         </div>
 
+        <button v-if="counts.keep" class="df-more" @click="showKeep = !showKeep">
+          <template v-if="showKeep">收起 {{ counts.keep }} 块没改动的</template>
+          <template v-else>下面只列改动，展开还能看 {{ counts.keep }} 块没改动的</template>
+        </button>
+
         <div class="ai-preview ai-diff">
-          <div v-for="(r, i) in rows" :key="i" class="df-row" :class="'df-' + r.op">
+          <div v-for="(r, i) in visibleRows" :key="i" class="df-row" :class="'df-' + r.op">
             <div class="df-tag">
               <template v-if="r.op === 'keep'">保留</template>
               <template v-else>
                 <input v-model="r.checked" type="checkbox" />
-                <span>{{ r.op === 'replace' ? '改' : r.op === 'add' ? '新' : '删' }}</span>
+                <span>{{
+                  r.op === 'replace' ? '改' : r.op === 'move' ? '移' : r.op === 'add' ? '新' : '删'
+                }}</span>
               </template>
             </div>
             <div class="df-body">
+              <p v-if="r.op === 'move'" class="df-from">
+                {{ secName(r.oldSection) }} → {{ secName(r.section) }}
+              </p>
               <BlockView v-if="r.op === 'keep' || r.op === 'drop'" :block="r.block" expand />
               <template v-else-if="r.op === 'replace'">
                 <div v-if="r.old" class="df-old">
@@ -188,7 +220,7 @@ const apply = () => {
                   <BlockView :block="{ ...r.block, id: r.id + '-pv' }" expand />
                 </div>
               </template>
-              <BlockView v-else :block="{ ...r.block, id: 'df-add-' + i }" expand />
+              <BlockView v-else :block="{ ...r.block, id: 'df-' + r.op + '-' + i }" expand />
             </div>
           </div>
         </div>

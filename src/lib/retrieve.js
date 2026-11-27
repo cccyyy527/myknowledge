@@ -1,6 +1,6 @@
 // 本地检索：把知识库挑出相关笔记、拼成能给模型看的「资料」
 // 没有后端、没有向量库，纯字符 n-gram 打分，够用到几千篇
-import { state, topicPath } from './store.js'
+import { liveNotes, topicPath } from './store.js'
 
 const MAX_NOTES = 10
 const BUDGET = 18000 // 资料总字符上限，约 9k token
@@ -123,7 +123,7 @@ export function searchNotes(question, { limit = 6, extra = '' } = {}) {
   if (!toks.length && !phrase) return []
   const seen = new Set(toks)
   const softToks = tokenize(extra).filter((t) => !seen.has(t))
-  return state.notes
+  return liveNotes()
     .map((note) => ({ note, score: scoreNote(note, toks, phrase, softToks) }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -148,7 +148,7 @@ export function searchLibrary(question, { limit = MAX_NOTES, extra = '' } = {}) 
   const toks = tokenize(question)
   const seen = new Set(toks)
   const softToks = tokenize(extra).filter((t) => !seen.has(t))
-  const ranked = state.notes
+  const ranked = liveNotes()
     .map((note) => ({ note, score: scoreNote(note, toks, phrase, softToks) }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -161,7 +161,7 @@ export function searchLibrary(question, { limit = MAX_NOTES, extra = '' } = {}) 
 
 // 组资料：优先命中，一篇都没命中就退回最近改的几篇，避免模型完全瞎猜
 export function buildContext(question, { budget = BUDGET, extra = '' } = {}) {
-  const notes = state.notes.filter((n) => (n.blocks || []).length)
+  const notes = liveNotes().filter((n) => (n.blocks || []).length)
   if (!notes.length) return { empty: true, text: '', used: [] }
 
   let picked = searchLibrary(question, { extra })
@@ -195,8 +195,8 @@ export function buildContext(question, { budget = BUDGET, extra = '' } = {}) {
 }
 
 export function libraryStats() {
-  const notes = state.notes.length
-  const blocks = state.notes.reduce(
+  const notes = liveNotes().length
+  const blocks = liveNotes().reduce(
     (s, n) => s + (n.blocks || []).filter((b) => b.type !== 'heading').length,
     0,
   )

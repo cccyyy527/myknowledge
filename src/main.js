@@ -8,6 +8,7 @@ import NotePage from './pages/NotePage.vue'
 import AggregatePage from './pages/AggregatePage.vue'
 import SearchPage from './pages/SearchPage.vue'
 import OrphanPage from './pages/OrphanPage.vue'
+import TrashPage from './pages/TrashPage.vue'
 import 'katex/dist/katex.min.css'
 import './styles.css'
 
@@ -21,6 +22,7 @@ const router = createRouter({
     { path: '/agg/:kind', component: AggregatePage },
     { path: '/search', component: SearchPage },
     { path: '/orphans', component: OrphanPage },
+    { path: '/trash', component: TrashPage },
   ],
   scrollBehavior: () => ({ top: 0 }),
 })

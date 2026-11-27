@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import katex from 'katex'
 import OcrDialog from './OcrDialog.vue'
-import { state } from '../lib/store.js'
+import { liveNotes } from '../lib/store.js'
 import { normTitle } from '../lib/links.js'
 
 const props = defineProps({
@@ -50,7 +50,7 @@ const syncWiki = (el) => {
   const q = normTitle(seg)
   const seen = new Set()
   const list = []
-  for (const n of state.notes) {
+  for (const n of liveNotes()) {
     const t = String(n.title || '').trim()
     const k = normTitle(t)
     if (!k || seen.has(k) || (q && !k.includes(q))) continue

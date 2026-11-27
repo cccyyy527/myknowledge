@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import katex from 'katex'
-import { state } from '../lib/store.js'
+import { liveNotes } from '../lib/store.js'
 import { isWholeCard, resolveTitle } from '../lib/links.js'
 
 const props = defineProps({
@@ -39,7 +39,7 @@ const esc = (s) =>
 
 // [[另一篇的标题]] → 可点的 chip；标题对不上库里任何一篇时标成「未创建」
 const chipHtml = (title, card) => {
-  const hit = resolveTitle(title, state.notes)
+  const hit = resolveTitle(title, liveNotes())
   const cls = ['note-link', card ? 'note-link-card' : '', hit ? '' : 'missing'].filter(Boolean).join(' ')
   const attr = hit ? `data-note="${esc(hit.id)}"` : `data-make="${esc(title)}"`
   const tip = hit ? `跳到《${hit.title}》` : `还没有《${title}》，点一下新建`

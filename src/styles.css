@@ -1177,3 +1177,33 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .sk-row.fixed { cursor: default; }
 .sk-name { font-weight: 600; white-space: nowrap; }
 .sk-desc { color: var(--ink-2); font-size: 12px; }
+
+/* ---------- 换分类 ---------- */
+.move-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 0; padding: 9px 12px;
+  border: 1px dashed var(--line); border-radius: var(--radius); background: #fbfaf8;
+}
+.move-sel { width: auto; max-width: 280px; margin-bottom: 0; }
+
+/* ---------- 待补清单 ---------- */
+.todo-item { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.todo-done {
+  flex: none; width: 20px; height: 20px; margin-top: 1px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--panel);
+  color: var(--ink-3); font-size: 12px; line-height: 1; cursor: pointer;
+}
+.todo-done:hover { border-color: var(--ok, #4a7c59); background: #f0f6f1; color: var(--ok, #4a7c59); }
+.todo-item .agg-main { flex: 1; min-width: 200px; }
+.todo-item .agg-src { width: 100%; margin-left: 30px; }
+
+/* 回收站入口：比「失去归属」安静一级 */
+.side-orphan.quiet { border-style: solid; border-color: var(--line); background: none; color: var(--ink-3); }
+.side-orphan.quiet:hover { border-color: #cfcdc7; color: var(--ink-2); background: #faf9f7; }
+.side-orphan.quiet .side-orphan-mark { background: none; width: auto; font-size: 12px; }
+
+@media (max-width: 560px) {
+  .move-row { flex-direction: column; align-items: stretch; }
+  .move-sel { max-width: none; width: 100%; }
+  .todo-item .agg-src { margin-left: 0; }
+}

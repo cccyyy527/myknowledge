@@ -13,6 +13,7 @@ import {
   removeTopic,
   removeDomain,
   orphanNotes,
+  trashedNotes,
   snapshot,
   applyRemote,
 } from './lib/store.js'
@@ -34,6 +35,7 @@ const treeOpen = reactive({ 't-variance': true })
 
 // 域被删掉后剩下来的笔记，只在真有的时候露出来
 const orphanCount = computed(() => orphanNotes().length)
+const trashCount = computed(() => trashedNotes().length)
 
 let timer = null
 let quietUntil = 0
@@ -126,6 +128,7 @@ const delDomain = (d) => {
       <RouterLink to="/agg/formulas">公式</RouterLink>
       <RouterLink to="/agg/qa">问答</RouterLink>
       <RouterLink to="/agg/pitfalls">坑</RouterLink>
+      <RouterLink to="/agg/todos">待补</RouterLink>
     </nav>
     <button class="sync-btn" title="AI 整理" @click="aiOpen = true">✨</button>
     <button class="sync-btn" :title="syncTip || '云同步设置'" @click="syncOpen = true">
@@ -216,6 +219,12 @@ const delDomain = (d) => {
         <span class="side-orphan-mark">!</span>
         失去归属的笔记
         <span class="side-orphan-n">{{ orphanCount }}</span>
+      </RouterLink>
+
+      <RouterLink v-if="trashCount" to="/trash" class="side-orphan quiet">
+        <span class="side-orphan-mark">🗑</span>
+        回收站
+        <span class="side-orphan-n">{{ trashCount }}</span>
       </RouterLink>
 
       <p class="side-note">

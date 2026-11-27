@@ -8,10 +8,13 @@ import {
   domainById,
   touchNote,
   removeNote,
+  moveNote,
+  liveNotes,
   newBlockId,
   noteBadges,
   insertBlocks,
   createNote,
+  flattenTopics,
   state,
 } from '../lib/store.js'
 import { backlinksTo } from '../lib/links.js'
@@ -411,10 +414,32 @@ const applyAi = ({ action, blocks }) => {
 }
 
 const del = () => {
-  if (!confirm('删除这篇笔记？原型阶段无法恢复。')) return
+  if (!confirm('删除这篇笔记？会先进回收站，之后能捞回来。')) return
   const t = note.value.topicId
   removeNote(note.value.id)
   router.push(t ? `/t/${t}` : '/orphans')
+}
+
+/* ---------- 换分类：写错地方不用删了重写 ---------- */
+const moveOpen = ref(false)
+const moveTo = ref('')
+const moveGroups = computed(() =>
+  state.domains.map((d) => ({ domain: d, rows: flattenTopics(d.id, true) })).filter((g) => g.rows.length),
+)
+const openMove = () => {
+  moveTo.value = note.value.topicId || ''
+  moveOpen.value = true
+}
+const doMove = () => {
+  const t = moveTo.value
+  if (!t || t === note.value.topicId) {
+    moveOpen.value = false
+    return
+  }
+  if (!moveNote(note.value.id, t)) return
+  moveOpen.value = false
+  const name = topicPath(t).map((x) => x.name).join(' / ')
+  savedAt.value = `已移到 ${name}`
 }
 
 // 问答卡里的 [1] 引用 chip：目标是另一篇还在的笔记才跳
@@ -433,7 +458,7 @@ const makeNote = (title) => {
   router.push(`/n/${made.id}`)
 }
 
-const backlinks = computed(() => backlinksTo(note.value?.id, state.notes))
+const backlinks = computed(() => backlinksTo(note.value?.id, liveNotes()))
 </script>
 
 <template>
@@ -462,8 +487,25 @@ const backlinks = computed(() => backlinksTo(note.value?.id, state.notes))
         <button class="btn-ghost" title="让 AI 重排整篇" @click="wholeAi = true">
           ✨ 整篇助手
         </button>
+        <button class="btn-ghost" title="换到别的分类下" @click="moveOpen ? (moveOpen = false) : openMove()">
+          ⇄ 换分类
+        </button>
         <button class="btn-ghost danger" @click="del">删除</button>
       </div>
+    </div>
+
+    <div v-if="moveOpen" class="move-row">
+      <span class="adder-label">移到</span>
+      <select v-model="moveTo" class="inp move-sel">
+        <option value="" disabled>选一个分类</option>
+        <optgroup v-for="g in moveGroups" :key="g.domain.id" :label="g.domain.name">
+          <option v-for="r in g.rows" :key="r.topic.id" :value="r.topic.id">
+            {{ '　'.repeat(r.depth) }}{{ r.topic.name }}
+          </option>
+        </optgroup>
+      </select>
+      <button class="btn" :disabled="!moveTo || moveTo === note.topicId" @click="doMove">移到这里</button>
+      <button class="btn-ghost" @click="moveOpen = false">取消</button>
     </div>
 
     <p class="note-meta">

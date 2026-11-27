@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { state, snapshot, applyRemote } from '../lib/store.js'
+import { state, liveNotes, snapshot, applyRemote } from '../lib/store.js'
 import { loadRemote, saveRemote, clearRemote, isConfigured } from '../lib/remote.js'
 import { pullAll, pushDirty, resetMeta } from '../lib/sync.js'
 import { notesDirOf } from '../lib/split.js'
@@ -75,7 +75,7 @@ const doForget = () => {
   say('已断开云端同步，数据仍在本地')
 }
 
-const noteCount = () => state.notes.length
+const noteCount = () => liveNotes().length
 const notesDir = computed(() => `${notesDirOf(cfg.value) || 'notes'}/`)
 </script>
 

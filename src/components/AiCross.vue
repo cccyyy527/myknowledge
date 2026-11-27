@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { state, createNote, topicPath, flattenTopics } from '../lib/store.js'
+import { liveNotes, createNote, topicPath, flattenTopics } from '../lib/store.js'
 import {
   loadAI,
   isAiReady,
@@ -62,7 +62,7 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '未
 
 const list = computed(() => {
   const kw = q.value.trim().toLowerCase()
-  const all = [...state.notes].sort(byUpdated)
+  const all = [...liveNotes()].sort(byUpdated)
   if (!kw) return all.slice(0, 60)
   return all
     .filter((n) =>
@@ -89,7 +89,7 @@ const unpick = (id) => {
   if (at >= 0) ids.value.splice(at, 1)
 }
 
-const pickedNotes = computed(() => ids.value.map((id) => state.notes.find((n) => n.id === id)).filter(Boolean))
+const pickedNotes = computed(() => ids.value.map((id) => liveNotes().find((n) => n.id === id)).filter(Boolean))
 
 const runMerge = async () => {
   if (ids.value.length < 2) return say('先勾两篇以上', true)

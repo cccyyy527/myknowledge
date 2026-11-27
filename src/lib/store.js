@@ -69,6 +69,17 @@ export const topicById = (id) => state.topics.find((t) => t.id === id)
 export const domainById = (id) => state.domains.find((d) => d.id === id)
 export const noteById = (id) => state.notes.find((n) => n.id === id)
 
+/* ---------------- 软删除：笔记上挂 deletedAt ----------------
+   不真的从数组里去掉：回收站要能捞回来，云端文件结构也不用动 —— 
+   deletedAt 跟着笔记一起进它所在域的那个 json，多出来的字段老代码不认也无所谓。 */
+
+export const liveNotes = () => state.notes.filter((n) => !n.deletedAt)
+
+export const trashedNotes = () =>
+  state.notes
+    .filter((n) => n.deletedAt)
+    .sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)))
+
 // 一级分类（挂在域下面，parentId === ''）
 export const topicsOf = (domainId) =>
   state.topics.filter((t) => t.domainId === domainId && !t.parentId)
@@ -110,16 +121,16 @@ export function flattenTopics(domainId, isOpen) {
 }
 
 export const notesOfTopic = (topicId) =>
-  state.notes.filter((n) => n.topicId === topicId).sort(byPinnedThenUpdated)
+  state.notes.filter((n) => n.topicId === topicId && !n.deletedAt).sort(byPinnedThenUpdated)
 
 // 含下级的笔记，用于「分组」页汇总
 export function notesOfSubtree(topicId) {
   const ids = new Set(subtreeIds(topicId))
-  return state.notes.filter((n) => ids.has(n.topicId)).sort(byPinnedThenUpdated)
+  return state.notes.filter((n) => ids.has(n.topicId) && !n.deletedAt).sort(byPinnedThenUpdated)
 }
 
 export const notesOfDomain = (domainId) =>
-  state.notes.filter((n) => n.domainId === domainId).sort(byPinnedThenUpdated)
+  state.notes.filter((n) => n.domainId === domainId && !n.deletedAt).sort(byPinnedThenUpdated)
 
 // 域没了（别的设备删掉后合并回来、或老数据里 domainId 指向不存在的域），
 // 笔记会落到 notes/_orphan.json。文件有兜底，界面也得看得见，否则就是黑洞。
@@ -127,6 +138,7 @@ export function orphanNotes() {
   const ids = new Set(state.domains.map((d) => d.id))
   return state.notes
     .filter((n) => {
+      if (n.deletedAt) return false
       const domainId = n.domainId || topicById(n.topicId)?.domainId || ''
       return !ids.has(domainId)
     })
@@ -143,6 +155,9 @@ export function adoptNote(noteId, topicId) {
   touchNote(n)
   return true
 }
+
+// 在分类之间挪一篇正常笔记（orphan 用 adoptNote，两者等价，这里语义更直白）
+export const moveNote = (noteId, topicId) => adoptNote(noteId, topicId)
 
 // 云端不存 updatedAt，拉回本机时才会补上；万一还是缺，就退回 createdAt
 const stampOf = (n) => new Date(n.updatedAt || n.createdAt || 0).getTime() || 0
@@ -340,20 +355,51 @@ export function touchNote(note) {
   note.updatedAt = new Date().toISOString()
 }
 
+// 软删除：进回收站，能捞回来；要真删得走 purgeNote
 export function removeNote(id) {
-  const i = state.notes.findIndex((n) => n.id === id)
+  const n = noteById(id)
+  if (!n) return false
+  n.deletedAt = new Date().toISOString()
+  touchNote(n)
+  return true
+}
+
+export function restoreNote(id) {
+  const n = noteById(id)
+  if (!n || !n.deletedAt) return false
+  delete n.deletedAt
+  touchNote(n)
+  return true
+}
+
+// 彻底删除（不可恢复）
+export function purgeNote(id) {
+  const i = state.notes.findIndex((n) => n.id === id && n.deletedAt)
   if (i >= 0) state.notes.splice(i, 1)
 }
+
+export function emptyTrash() {
+  state.notes = state.notes.filter((n) => !n.deletedAt)
+}
+
+// 回收站里的一篇要重新挂回分类：原来的分类可能已经没了
+export const trashTopicOf = (note) => topicById(note.topicId) || null
 
 export function searchNotes(q) {
   const kw = q.trim().toLowerCase()
   if (!kw) return []
   const hits = []
   for (const n of state.notes) {
+    if (n.deletedAt) continue
     const titleHit = n.title.toLowerCase().includes(kw)
+    const tagHit = (n.tags || []).find((t) => String(t).toLowerCase().includes(kw))
     const blockHit = n.blocks.find((b) => blockText(b).toLowerCase().includes(kw))
-    if (titleHit || blockHit) {
-      const ctx = blockHit ? snippet(blockText(blockHit), kw) : noteSummary(n)
+    if (titleHit || tagHit || blockHit) {
+      const ctx = blockHit
+        ? snippet(blockText(blockHit), kw)
+        : tagHit
+          ? `标签 #${tagHit}`
+          : noteSummary(n)
       hits.push({ note: n, ctx })
     }
   }
@@ -372,13 +418,25 @@ function snippet(text, kw) {
   return (start > 0 ? '…' : '') + text.slice(start, start + 70) + '…'
 }
 
-// 全局聚合：术语 / 公式 / 问答 / 坑
+// 全局聚合：术语 / 公式 / 问答 / 坑 / 待补
 export function aggregate(type) {
   const out = []
   for (const note of state.notes) {
+    if (note.deletedAt) continue
     for (const b of note.blocks) {
       if (b.type === type && (b.term || b.latex || b.question || b.text)) out.push({ block: b, note })
     }
   }
   return out
+}
+
+// 待补清单上「做完了」= 把那块删掉；块级删除不进回收站，所以这里顺带给一句确认
+export function dropBlock(noteId, blockId) {
+  const n = noteById(noteId)
+  if (!n) return false
+  const i = (n.blocks || []).findIndex((b) => b.id === blockId)
+  if (i < 0) return false
+  n.blocks.splice(i, 1)
+  touchNote(n)
+  return true
 }

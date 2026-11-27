@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { SECTIONS, stripMark } from '../lib/ai.js'
-import { state, flattenTopics, topicPath } from '../lib/store.js'
+import { state, liveNotes, flattenTopics, topicPath } from '../lib/store.js'
 import { attachRefs, groupBySection, plainBlocks } from '../lib/draft.js'
 import BlockView from './BlockView.vue'
 
@@ -43,7 +43,7 @@ const editPlan = computed(() => {
 const OP_TEXT = { replace: '改写', remove: '删除', insert: '就地插入' }
 
 const noteOptions = computed(() =>
-  state.notes.map((n) => ({
+  liveNotes().map((n) => ({
     id: n.id,
     title: n.title,
     path: topicPath(n.topicId).map((t) => t.name).join(' / '),

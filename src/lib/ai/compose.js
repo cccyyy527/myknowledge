@@ -1,6 +1,6 @@
 // L2 录入：一段乱笔记 → 分类 + 分块 + 归段；以及一次问答 → 归到哪篇
 
-import { state } from '../store.js'
+import { state, liveNotes } from '../store.js'
 import { searchNotes } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, normalizeBlocks } from './schema.js'
@@ -73,7 +73,7 @@ export const FILE_RULE = `新建一篇，还是追加进已有的某一篇 —�
 - 拿不准就新建。`
 
 export async function fileAnswer({ question, answer, used = [], cfg, signal } = {}) {
-  const notes = state.notes
+  const notes = liveNotes()
   const MAX_DIGEST_NOTES = 100 // 归档时最多列这么多篇给模型挑，再多它也读不过来，只会稀释注意力
   const picked = []
   const seen = new Set()

@@ -1,12 +1,12 @@
 <script setup>
-import { state, domainStats } from '../lib/store.js'
+import { state, liveNotes, domainStats } from '../lib/store.js'
 </script>
 
 <template>
   <section class="page">
     <h1 class="page-title">知识库</h1>
     <p class="page-sub">
-      {{ state.domains.length }} 个域 · {{ state.topics.length }} 个分类 · {{ state.notes.length }} 篇笔记
+      {{ state.domains.length }} 个域 · {{ state.topics.length }} 个分类 · {{ liveNotes().length }} 篇笔记
       —— 覆盖度是算出来的，不用自评。
     </p>
 

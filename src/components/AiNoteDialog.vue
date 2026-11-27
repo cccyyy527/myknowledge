@@ -120,6 +120,7 @@ const run = async (preset) => {
       outside: outside.value,
       history: rounds.value,
       cfg: { ...cfg.value, thinking: think.value ? 'on' : 'off' },
+      onStep: (step) => say(step),
     })
     if (r.title) title.value = r.title
     titleHint.value = r.title
@@ -128,8 +129,9 @@ const run = async (preset) => {
     rows.value = decorate(r.ops)
     rounds.value = [...rounds.value, ins]
     instruction.value = ''
-    if (!r.ops.length) say('模型没给出可用的改动，换个说法再试', true)
+    if (!r.ops.some((o) => o.op !== 'keep')) say('这一轮没找到要动的地方，把要求说具体点再试', true)
     else if (r.noticed) say('这次思考把输出额度吃光了，已自动关掉「深度思考」重跑一遍（本机这次请顺手把开关关掉，省得下次再撞）')
+    else say('')
   } catch (e) {
     say(String(e.message || e), true)
   } finally {

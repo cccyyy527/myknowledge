@@ -307,55 +307,81 @@ export async function ping(cfg) {
 // 带 tools 的流式请求：正文边收边显示，顺带把 tool_calls 拼起来
 export function chatStreamTools(
   messages,
-  { cfg, tools, toolChoice, temperature = 0.2, maxTokens = 2000, onDelta, onThink, signal } = {},
+  {
+    cfg,
+    tools,
+    toolChoice,
+    temperature = 0.2,
+    maxTokens = 2000,
+    onDelta,
+    onThink,
+    signal,
+    onNoThinking,
+  } = {},
 ) {
-  const mt = budgetOf(maxTokens, cfg)
-  const body = { messages, temperature, max_tokens: mt, stream: true }
-  if (tools?.length) {
-    body.tools = tools
-    body.tool_choice = toolChoice || 'auto'
-  }
-  const calls = []
-  let full = ''
-  let finish = ''
-  let reasoning = ''
-  let sample = ''
-  return request(cfg, body, { signal }, async (res) => {
-    await readSse(res, (j) => {
-      if (!sample) sample = brief(j)
-      const ch = j?.choices?.[0]
-      if (ch?.finish_reason) finish = ch.finish_reason
-      const delta = ch?.delta
-      if (!delta) return
-      if (delta.reasoning_content) {
-        reasoning += delta.reasoning_content
-        onThink && onThink(delta.reasoning_content, reasoning)
+  const c = cfg || loadAI()
+  const once = (cc) => {
+    const mt = budgetOf(maxTokens, cc)
+    const body = { messages, temperature, max_tokens: mt, stream: true }
+    if (tools?.length) {
+      body.tools = tools
+      body.tool_choice = toolChoice || 'auto'
+    }
+    const calls = []
+    let full = ''
+    let finish = ''
+    let reasoning = ''
+    let sample = ''
+    return request(cc, body, { signal }, async (res) => {
+      await readSse(res, (j) => {
+        if (!sample) sample = brief(j)
+        const ch = j?.choices?.[0]
+        if (ch?.finish_reason) finish = ch.finish_reason
+        const delta = ch?.delta
+        if (!delta) return
+        if (delta.reasoning_content) {
+          reasoning += delta.reasoning_content
+          onThink && onThink(delta.reasoning_content, reasoning)
+        }
+        if (delta.content) {
+          full += delta.content
+          onDelta && onDelta(delta.content, full)
+        }
+        for (const [i, tc] of (delta.tool_calls || []).entries()) {
+          const at = Number.isInteger(tc.index) ? tc.index : i
+          const cur =
+            calls[at] ||
+            (calls[at] = { id: '', type: 'function', function: { name: '', arguments: '' } })
+          if (tc.id) cur.id = tc.id
+          if (tc.function?.name) cur.function.name += tc.function.name
+          if (tc.function?.arguments) cur.function.arguments += tc.function.arguments
+        }
+      })
+      const toolCalls = calls
+        .filter(Boolean)
+        .filter((x) => x.function.name)
+        .map((x, i) => ({ ...x, id: x.id || `call_${Date.now().toString(36)}_${i}` }))
+      // 一句话没给、工具也没调，这一轮就是空的：早点说清原因，别让 agent 白转到第 6 轮
+      if (!full && !toolCalls.length) {
+        const e = new Error(
+          noContent({ finish, reasoningChars: reasoning.length, maxTokens: mt, raw: sample }),
+        )
+        e.starved = Boolean(reasoning) && finish === 'length'
+        throw e
       }
-      if (delta.content) {
-        full += delta.content
-        onDelta && onDelta(delta.content, full)
-      }
-      for (const [i, tc] of (delta.tool_calls || []).entries()) {
-        const at = Number.isInteger(tc.index) ? tc.index : i
-        const cur =
-          calls[at] || (calls[at] = { id: '', type: 'function', function: { name: '', arguments: '' } })
-        if (tc.id) cur.id = tc.id
-        if (tc.function?.name) cur.function.name += tc.function.name
-        if (tc.function?.arguments) cur.function.arguments += tc.function.arguments
-      }
+      return { text: full, toolCalls, reasoning }
+    }).catch((e) => {
+      // 端点压根不认 tools / functions 时才值得退回预检索流程：只认 4xx 里明确提到 tools 的报错，
+      // 别让「超时」「没返回内容」这种偶发错误把 agent 永久关掉
+      if (e.status >= 400 && e.status < 500 && /tool|function/i.test(e.message)) e.noTools = true
+      throw e
     })
-    const toolCalls = calls
-      .filter(Boolean)
-      .filter((x) => x.function.name)
-      .map((x, i) => ({ ...x, id: x.id || `call_${Date.now().toString(36)}_${i}` }))
-    // 一句话没给、工具也没调，这一轮就是空的：早点说清原因，别让 agent 白转到第 6 轮
-    if (!full && !toolCalls.length)
-      throw new Error(noContent({ finish, reasoningChars: reasoning.length, maxTokens: mt, raw: sample }))
-    return { text: full, toolCalls, reasoning }
-  }).catch((e) => {
-    // 端点压根不认 tools / functions 时才值得退回预检索流程：只认 4xx 里明确提到 tools 的报错，
-    // 别让「超时」「没返回内容」这种偶发错误把 agent 永久关掉
-    if (e.status >= 400 && e.status < 500 && /tool|function/i.test(e.message)) e.noTools = true
-    throw e
+  }
+  // 和 chat() 一样的兜底：思考把额度吃光就关掉思考重跑这一轮
+  if (!thinkOn(c)) return once(c)
+  return once(c).catch((e) => {
+    if (!e.starved || signal?.aborted) throw e
+    onNoThinking && onNoThinking()
+    return once({ ...c, thinking: 'off' })
   })
 }

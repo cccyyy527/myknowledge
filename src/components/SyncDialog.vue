@@ -55,7 +55,7 @@ const doPull = () =>
     applyRemote(r.snapshot)
     emit('synced')
     const t = r.snapshot.updatedAt ? new Date(r.snapshot.updatedAt).toLocaleString() : '未知时间'
-    say(r.legacy ? `已读入云端的老格式 kb.json（修改于 ${t}），下次上传会自动按域拆开` : `已用云端数据覆盖本地（云端修改于 ${t}）`)
+    say(r.legacy ? `已读入云端的老格式 kb.json（修改于 ${t}），下次上传会拆成一篇一个文件` : `已用云端数据覆盖本地（云端修改于 ${t}）`)
   })
 
 const doPush = () =>
@@ -63,7 +63,9 @@ const doPush = () =>
     if (!isConfigured(cfg.value)) return say('先填 owner / repo / token', true)
     const r = await pushDirty(cfg.value, snapshot(), { force: true })
     emit('synced')
-    say(`已上传 ${r.pushed.length} 个文件：${r.pushed.join('、')}`)
+    const bits = [`已上传 ${r.pushed.length} 个文件`]
+    if (r.removed.length) bits.push(`删掉 ${r.removed.length} 个`)
+    say(bits.join('，'))
   })
 
 const doForget = () => {
@@ -114,8 +116,9 @@ const notesDir = computed(() => `${notesDirOf(cfg.value) || 'notes'}/`)
       </label>
 
       <p class="sync-hint">
-        索引文件只放分类树；笔记按域拆到 <b>{{ notesDir }}</b> 下（如 <b>d4.json</b>），
-        改一篇笔记只写它所在域的那一个文件。
+        索引文件只放分类树；每篇笔记单独一个文件，放在 <b>{{ notesDir }}</b> 下（如
+        <b>n-cuped.json</b>），改一篇只写它自己那一个文件，git 里也是一篇一个 diff。
+        老版本的按域拆分（如 <b>d4.json</b>）会在下次上传时自动迁过来。
       </p>
 
       <p class="sync-hint">

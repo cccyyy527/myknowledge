@@ -92,6 +92,21 @@ export async function putFile(cfg, path, data, sha, message) {
   return json.content.sha
 }
 
+// 删一个文件（笔记被彻底删掉 / 老布局的域文件迁走后清理）
+export async function deleteFile(cfg, path, sha, message) {
+  const res = await fetch(fileUrl(cfg, path), {
+    method: 'DELETE',
+    headers: { ...headers(cfg), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: message || `kb: 删除 ${String(path).split('/').pop()}`,
+      sha,
+      branch: cfg.branch,
+    }),
+  })
+  if (!res.ok && res.status !== 404) throw new Error(await errText(res))
+  return true
+}
+
 // 列目录拿各文件 sha：一次请求就知道哪些变了，不用逐个下载
 export async function listDir(cfg, dir) {
   const res = await fetch(`${fileUrl(cfg, dir)}?ref=${encodeURIComponent(cfg.branch)}`, {

@@ -1,7 +1,9 @@
-// 把整份快照拆成「分类索引 + 每个域一个笔记文件」
-// 好处：改一篇笔记只写它所在域的那个文件，commit 小、diff 能看、多端改不同域能合并
+// 云端布局：kb.json 存目录（域 + 分类），notes/<noteId>.json 一篇一个文件。
+// 好处：改一篇只写那一个文件，git 里一篇一个 diff；换分类不用搬家（路径里没有域），
+// 多端改不同笔记也不会撞在同一个文件上。
+// 老布局是 notes/<domainId>.json（一个域一个文件），读的时候还认，推的时候顺手迁走。
 
-export const SCHEMA = 2
+export const SCHEMA = 3
 
 // FNV-1a：只用来判断「这个文件有没有变」，不需要密码学强度
 export function hashStr(s) {
@@ -22,27 +24,23 @@ const forPush = (n) => {
   return out
 }
 
-// 文件正文：连文件级 updatedAt 一起没有，整份文件里不出现任何时间戳（createdAt 除外，它不变）
-export const fileBody = (f) => ({
-  schema: f.schema,
-  domainId: f.domainId,
-  notes: (f.notes || []).map(forPush),
-})
-export const indexBody = (i) => ({ schema: i.schema, domains: i.domains || [], topics: i.topics || [] })
+// 标签在编辑态可能是「刚加的空格子」，文件里不该有这种东西
+const tidyNote = (n) =>
+  forPush({
+    ...n,
+    tags: (n.tags || []).map((t) => String(t || '').trim()).filter(Boolean),
+  })
 
-// 「内容指纹」：只看真内容，不看 updatedAt / version。
-// 时间戳和版本号每次保存都变，算进去就等于每次都推，云端会堆满只有一行的 commit。
-const noteSig = (n) => {
-  const { updatedAt, version, ...rest } = n
-  return rest
-}
-export const fileKey = (f) => hashStr(JSON.stringify([f.schema, f.domainId, (f.notes || []).map(noteSig)]))
+// ---- 目录（kb.json） ----
+export const indexBody = (i) => ({ schema: SCHEMA, domains: i.domains || [], topics: i.topics || [] })
+export const indexKey = (i) => hashStr(JSON.stringify([SCHEMA, i.domains || [], i.topics || []]))
 
-// 老版本把 note.updatedAt 也算进指纹。留着它只为了认得出「升级前存下的指纹」，
-// 免得升到新版本后第一次同步把所有域文件重推一遍。
-const fileKeyLegacy = (f) => hashStr(JSON.stringify([f.schema, f.domainId, f.notes]))
-export const keyMatches = (stored, f) => Boolean(stored) && (stored === fileKey(f) || stored === fileKeyLegacy(f))
-export const indexKey = (i) => hashStr(JSON.stringify([i.schema, i.domains, i.topics]))
+// ---- 单篇笔记文件 ----
+export const noteBody = (n) => ({ schema: SCHEMA, note: tidyNote(n) })
+// 指纹只看真内容，不看 updatedAt：否则每次保存都会推一遍，云端堆满只有一行的 commit
+// 直接拿文件正文算，省得再取一遍原对象
+export const noteBodyKey = (body) => hashStr(JSON.stringify([SCHEMA, body?.note ?? null]))
+export const noteKey = (n) => noteBodyKey(noteBody(n))
 
 export const dirOf = (p) => {
   const s = String(p || '')
@@ -55,75 +53,68 @@ export const notesDirOf = (cfg) => {
   const d = dirOf(cfg.path)
   return d ? `${d}/notes` : 'notes'
 }
-export const noteFileOf = (domainId) => `${domainId || '_orphan'}.json`
-export const notePathOf = (cfg, domainId) => `${notesDirOf(cfg)}/${noteFileOf(domainId)}`
+// 路径里只有笔记 id：换分类/换域不用动文件位置
+export const noteFileOf = (noteId) => `${noteId}.json`
+export const notePathOf = (cfg, noteId) => `${notesDirOf(cfg)}/${noteFileOf(noteId)}`
+
+// 文件名是不是新布局的单篇笔记（老布局的域文件叫 d4.json 这类）
+const NOTE_FILE_RE = /^n-[a-z0-9]+\.json$/i
+export const isNoteFile = (name) => NOTE_FILE_RE.test(String(name || ''))
+export const noteIdOfFile = (name) => (isNoteFile(name) ? String(name).slice(0, -5) : '')
+// 老布局的域文件：json 但不是单篇笔记
+export const isDomainFile = (name) => /\.json$/i.test(String(name || '')) && !isNoteFile(name)
 
 // 老笔记可能只有 topicId，没有 domainId
 export function domainOfNote(note, topics) {
   if (note.domainId) return note.domainId
-  const t = topics.find((x) => x.id === note.topicId)
+  const t = (topics || []).find((x) => x.id === note.topicId)
   return t ? t.domainId : ''
 }
 
-// 每个域都出一个文件（空的也出），这样把某域笔记删光时远端文件会被清成 []，
-// 而不是残留旧内容等着下次被拉回来
-// 标签在编辑态可能是「刚加的空格子」，文件里不该有这种东西
-const tidyNote = (n) =>
-  forPush({
-    ...n,
-    tags: (n.tags || []).map((t) => String(t || '').trim()).filter(Boolean),
-  })
-
-export function splitSnapshot(snap) {
+// 整份快照 → { index, files: { [noteId]: 文件正文 } }
+export function splitNotes(snap) {
   const index = {
     schema: SCHEMA,
     domains: snap.domains || [],
     topics: snap.topics || [],
   }
-
-  const buckets = new Map()
-  for (const d of index.domains) buckets.set(d.id, [])
-  for (const n of snap.notes || []) {
-    const id = domainOfNote(n, index.topics)
-    if (!buckets.has(id)) buckets.set(id, [])
-    buckets.get(id).push(tidyNote(n))
-  }
-
   const files = {}
-  for (const [domainId, notes] of buckets) {
-    files[noteFileOf(domainId)] = {
-      schema: SCHEMA,
-      domainId,
-      notes,
-    }
+  for (const n of snap.notes || []) {
+    if (!n || !n.id) continue
+    files[n.id] = noteBody(n)
   }
   return { index, files }
 }
 
-// 合并回来；顺序按 index.topics 的域顺序，保证多次拉取结果稳定
-export function joinFiles(index, fileList) {
-  const byDomain = new Map()
-  for (const f of fileList) {
-    if (f) byDomain.set(f.domainId || '', f.notes || [])
+// 一篇一个文件 → 快照。顺序按「域顺序 → 分类 → 建的时间」排，
+// 这样多端拉下来的顺序是确定的，不会因为拉的先后不同而抖动
+export function joinNotes(index, noteList, updatedAt) {
+  const order = new Map()
+  ;(index.domains || []).forEach((d, i) => order.set(d.id, i))
+  const rank = (n) => {
+    const d = domainOfNote(n, index.topics || [])
+    return order.has(d) ? order.get(d) : 999
   }
-  const notes = []
-  const seen = new Set()
-  for (const d of index.domains || []) {
-    const arr = byDomain.get(d.id)
-    if (!arr) continue
-    seen.add(d.id)
-    notes.push(...arr)
-  }
-  for (const [id, arr] of byDomain) {
-    if (!seen.has(id)) notes.push(...arr)
-  }
+  const notes = [...noteList].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      String(a.topicId || '').localeCompare(String(b.topicId || '')) ||
+      String(a.createdAt || '').localeCompare(String(b.createdAt || '')) ||
+      String(a.id).localeCompare(String(b.id)),
+  )
   return {
     domains: index.domains || [],
     topics: index.topics || [],
     notes,
-    updatedAt: index.updatedAt || 0,
+    updatedAt: updatedAt || 0,
   }
 }
 
-// 老版本：kb.json 里直接带 notes 数组
+// 老布局：notes/<domainId>.json 里带 notes 数组
+export function notesFromDomainFile(data) {
+  if (!data || !Array.isArray(data.notes)) return []
+  return data.notes.map((n) => ({ ...n, domainId: n.domainId || data.domainId || '' }))
+}
+
+// 更老：kb.json 里直接带 notes 数组
 export const isLegacy = (data) => Array.isArray(data?.notes)

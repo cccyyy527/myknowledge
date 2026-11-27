@@ -40,7 +40,12 @@ const trashCount = computed(() => trashedNotes().length)
 let timer = null
 let quietUntil = 0
 
-// 启动时：把云端按域拆开的文件合并回来，只重下载变了的部分
+const fileList = (arr) =>
+  arr.length <= 3
+    ? arr.map((p) => p.split('/').pop()).join('、')
+    : `${arr.slice(0, 3).map((p) => p.split('/').pop()).join('、')} 等 ${arr.length} 个文件`
+
+// 启动时：把云端一篇一个文件合并回来，只重下载变了的部分
 const pullQuiet = async () => {
   const cfg = loadRemote()
   if (!isConfigured(cfg)) return
@@ -49,13 +54,13 @@ const pullQuiet = async () => {
     if (r) {
       quietUntil = Date.now() + 800
       if (r.changed && r.snapshot) applyRemote(r.snapshot)
-      syncTip.value = r.legacy ? '云端还是老的单文件格式，下次保存会按域拆开' : '已拉取云端'
+      syncTip.value = r.legacy ? '云端还是老的单文件格式，下次保存会拆成一篇一个文件' : '已拉取云端'
     }
-    // 老格式的云端文件里带 updatedAt：趁这次开机把时间戳清掉，只做一次
+    // 老布局（一个域一个文件）换成一篇一个文件：趁这次开机搬过去，只做一次
     if (needsRestamp()) {
       quietUntil = Date.now() + 800
       const p = await pushDirty(cfg, snapshot())
-      if (p.pushed.length) syncTip.value = `已清掉云端时间戳（${p.pushed.length} 个文件）`
+      if (p.pushed.length || p.removed.length) syncTip.value = `已迁移云端布局（${p.pushed.length} 个文件）`
     }
   } catch (e) {
     syncTip.value = '拉取失败，检查同步配置'
@@ -75,8 +80,11 @@ watch(
     timer = setTimeout(async () => {
       try {
         const r = await pushDirty(cfg, snapshot())
-        if (!r.pushed.length) return
-        syncTip.value = '已上传 ' + r.pushed.map((p) => p.split('/').pop()).join('、')
+        if (!r.pushed.length && !r.removed.length) return
+        const bits = []
+        if (r.pushed.length) bits.push('已上传 ' + fileList(r.pushed))
+        if (r.removed.length) bits.push('已删除 ' + fileList(r.removed))
+        syncTip.value = bits.join('，')
       } catch (e) {
         syncTip.value = '上传失败：' + (e.message || e)
       }

@@ -9,12 +9,25 @@ import { buildSystem } from './skills.js'
 /* ---------- L3：问整个知识库 ---------- */
 
 // 历史只带结论、不带过程：一条回答几千字原样塞回去，几轮就把上下文吃光了
-export const trimHistory = (history = [], limit = 6, maxChars = 1500) =>
-  history.slice(-limit).map((m) => {
+// 只留最近几轮全文；更早的不整段扔掉，压成一行话题索引塞回去 ——
+// 用户爱用「那它呢」这种追问，老问题全丢光模型就不知道「它」指谁了
+export const trimHistory = (history = [], limit = 6, maxChars = 1500) => {
+  const older = history.slice(0, Math.max(0, history.length - limit))
+  const recent = history.slice(-limit).map((m) => {
     const c = str(m.content)
     const over = m.role === 'assistant' && c.length > maxChars
     return { role: m.role, content: over ? `${c.slice(0, maxChars)}…（后略）` : c }
   })
+  const asks = older
+    .filter((m) => m.role === 'user')
+    .map((m) => str(m.content).replace(/\s+/g, ' ').slice(0, 40))
+  if (!asks.length) return recent
+  return [
+    { role: 'user', content: `（更早还问过这些，只记得题目：${asks.join(' / ')}）` },
+    { role: 'assistant', content: '好，这些话题我还记得，需要时可以直接接着问。' },
+    ...recent,
+  ]
+}
 
 const ASK_SYSTEM = `你是这个私人知识库的问答助手。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记。
 
@@ -46,6 +59,7 @@ export async function askLibrary({
   skill,
   extra,
   onDelta,
+  onThink,
   signal,
 } = {}) {
   // 追问「那它的假设是什么」里没有关键词，只按这一句检索会漏到别的笔记上；
@@ -69,6 +83,7 @@ export async function askLibrary({
     temperature: strict ? 0.1 : 0.2,
     maxTokens: 1600,
     onDelta,
+    onThink,
     signal,
   })
   return { text, used, fallback, strict }

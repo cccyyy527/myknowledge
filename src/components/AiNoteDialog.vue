@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { loadAI, isAiReady, reviseNote, applyOps, diagnose, SECTIONS } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
 import AiThink from './AiThink.vue'
+import AiSpin from './AiSpin.vue'
 
 const props = defineProps({
   open: Boolean,
@@ -214,6 +215,7 @@ const apply = () => {
         >
           {{ busy ? '生成中…' : '✨ 生成改动' }}
         </button>
+        <AiSpin :active="!!busy" label="生成中" />
         <AiThink
           v-model="think"
           hint="整篇重排要判断哪块放错段、哪些重复，开思考通常更准；慢一些、费 token 多一点"

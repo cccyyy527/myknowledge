@@ -219,11 +219,11 @@ export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signa
 // 同一套接口的流式版本：边收边显示，长答案不用干等
 export function chatStream(
   messages,
-  { cfg, temperature = 0.3, maxTokens = 2000, onDelta, signal } = {},
+  { cfg, temperature = 0.3, maxTokens = 2000, onDelta, onThink, signal } = {},
 ) {
   let full = ''
   let finish = ''
-  let reasoningChars = 0
+  let reasoning = ''
   let sample = ''
   const mt = budgetOf(maxTokens, cfg)
   return request(
@@ -235,13 +235,19 @@ export function chatStream(
         if (!sample) sample = brief(j)
         const ch = j?.choices?.[0]
         if (ch?.finish_reason) finish = ch.finish_reason
-        if (ch?.delta?.reasoning_content) reasoningChars += ch.delta.reasoning_content.length
+        if (ch?.delta?.reasoning_content) {
+          reasoning += ch.delta.reasoning_content
+          onThink && onThink(ch.delta.reasoning_content, reasoning)
+        }
         const delta = ch?.delta?.content || ''
         if (!delta) return
         full += delta
         onDelta && onDelta(delta, full)
       })
-      if (!full) throw new Error(noContent({ finish, reasoningChars, maxTokens: mt, raw: sample }))
+      if (!full)
+        throw new Error(
+          noContent({ finish, reasoningChars: reasoning.length, maxTokens: mt, raw: sample }),
+        )
       return full
     },
   )
@@ -281,7 +287,7 @@ export async function ping(cfg) {
 // 带 tools 的流式请求：正文边收边显示，顺带把 tool_calls 拼起来
 export function chatStreamTools(
   messages,
-  { cfg, tools, toolChoice, temperature = 0.2, maxTokens = 2000, onDelta, signal } = {},
+  { cfg, tools, toolChoice, temperature = 0.2, maxTokens = 2000, onDelta, onThink, signal } = {},
 ) {
   const mt = budgetOf(maxTokens, cfg)
   const body = { messages, temperature, max_tokens: mt, stream: true }
@@ -301,7 +307,10 @@ export function chatStreamTools(
       if (ch?.finish_reason) finish = ch.finish_reason
       const delta = ch?.delta
       if (!delta) return
-      if (delta.reasoning_content) reasoning += delta.reasoning_content
+      if (delta.reasoning_content) {
+        reasoning += delta.reasoning_content
+        onThink && onThink(delta.reasoning_content, reasoning)
+      }
       if (delta.content) {
         full += delta.content
         onDelta && onDelta(delta.content, full)

@@ -19,6 +19,7 @@ import {
 } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
 import AiThink from './AiThink.vue'
+import AiSpin from './AiSpin.vue'
 import { searchNotes } from '../lib/retrieve.js'
 
 const props = defineProps({ open: Boolean })
@@ -235,6 +236,10 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
       <button :disabled="!!busy || ids.length < 2" @click="runAudit">
         {{ busy === 'audit' ? '核对中…' : '查一致性（只读）' }}
       </button>
+      <AiSpin
+        :active="!!busy"
+        :label="busy === 'audit' ? '核对中' : '整合中'"
+      />
       <AiThink
         v-model="think"
         hint="整合与一致性检查都属于想清楚再答的活，开一次试试；会慢一些、费 token 多一点"

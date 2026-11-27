@@ -149,9 +149,9 @@ const ask = async (preset) => {
   if (!q || busy.value) return
   if (!ready.value) return emit('setup')
 
-  // 只带最近几轮，问答本身比历史更重要
+  // 只带最近几轮全文，更早的在 trimHistory 里压成话题索引，问答本身比历史更重要
   const history = []
-  for (const t of turns.value.slice(-3)) {
+  for (const t of turns.value.slice(-8)) {
     history.push({ role: 'user', content: t.q })
     if (t.a) history.push({ role: 'assistant', content: t.a })
   }
@@ -160,6 +160,8 @@ const ask = async (preset) => {
   turns.value.push({
     q,
     a: '',
+    think: '',
+    showThink: true,
     used: [],
     trace: [],
     streaming: true,
@@ -188,6 +190,11 @@ const ask = async (preset) => {
           signal: ctrl.signal,
           onDelta: (_, full) => {
             turn.a = full
+            if (turn.think) turn.showThink = false
+            scroll()
+          },
+          onThink: (_, full) => {
+            turn.think = full
             scroll()
           },
           onTrace: (line) => {
@@ -226,6 +233,11 @@ const ask = async (preset) => {
         signal: ctrl.signal,
         onDelta: (_, full) => {
           turn.a = full
+          if (turn.think) turn.showThink = false
+          scroll()
+        },
+        onThink: (_, full) => {
+          turn.think = full
           scroll()
         },
       })
@@ -530,6 +542,15 @@ const doSave = () => {
         <div class="ask-a">
           <p v-if="t.err" class="ai-msg bad">{{ t.err }}</p>
           <template v-else>
+            <div v-if="t.think" class="ask-think" :class="{ live: t.streaming && !t.a }">
+              <button class="ask-think-h" @click="t.showThink = !t.showThink">
+                <span class="ask-think-dot"></span>
+                {{ t.streaming && !t.a ? '正在思考' : '思考过程' }}
+                <span class="ask-think-n">{{ t.think.length }} 字</span>
+                <span class="ask-think-ar">{{ t.showThink ? '收起' : '展开' }}</span>
+              </button>
+              <div v-show="t.showThink" class="ask-think-b">{{ t.think }}</div>
+            </div>
             <div v-if="t.trace && t.trace.length" class="ask-trace">
               <span v-for="(g, k) in t.trace" :key="k" class="ask-trace-i">{{ g }}</span>
             </div>

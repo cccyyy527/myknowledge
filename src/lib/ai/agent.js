@@ -291,6 +291,7 @@ export async function agentRun({
   refs = [],
   maxTokens = 2000,
   onDelta,
+  onThink,
   onTrace,
   signal,
 } = {}) {
@@ -304,6 +305,7 @@ export async function agentRun({
       temperature: strict ? 0.1 : 0.25,
       maxTokens,
       onDelta,
+      onThink,
       signal,
       ...extra,
     })

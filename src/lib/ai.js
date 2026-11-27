@@ -57,58 +57,70 @@ async function errText(res) {
   }
 }
 
-export async function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000 } = {}) {
-  const c = cfg || loadAI()
-  if (!isAiReady(c)) throw new Error('还没填 API Key，先到「设置」里配一下')
-  const res = await fetch(endpoint(c.base), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${c.key}`,
+// 等待上限：模型再慢也不该让界面永远停在「生成中」，超时就报错让用户重试
+const TIMEOUT_MS = 120000
+
+// 把外部 signal 和超时合成一个：哪个先触发都中断请求
+function guard(signal, timeoutMs = TIMEOUT_MS) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => {
+    ctrl.abort(
+      new DOMException(`等了 ${Math.round(timeoutMs / 1000)} 秒还没有回包，先停了`, 'TimeoutError'),
+    )
+  }, timeoutMs)
+  const onAbort = () => ctrl.abort(signal.reason)
+  if (signal) {
+    if (signal.aborted) ctrl.abort(signal.reason)
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  return {
+    signal: ctrl.signal,
+    done() {
+      clearTimeout(timer)
+      if (signal) signal.removeEventListener('abort', onAbort)
     },
-    body: JSON.stringify({
-      model: c.model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-      stream: false,
-    }),
-  })
-  if (!res.ok) throw new Error(await errText(res))
-  const json = await res.json()
-  const text = json?.choices?.[0]?.message?.content
-  if (!text) throw new Error('模型没有返回内容')
-  return text
+  }
 }
 
-// 同一套接口的流式版本：边收边显示，长答案不用干等
-export async function chatStream(
-  messages,
-  { cfg, temperature = 0.3, maxTokens = 2000, onDelta, signal } = {},
-) {
+// 服务端临时状态码：这类失败重试一次往往就好了，不该让整轮问答白跑
+const RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504])
+
+// 所有请求都走这里：端点 / 鉴权 / 超时 / 取消只管一份，read 负责把 response 读成值
+async function request(cfg, body, { signal, timeoutMs, retry = 1 } = {}, read) {
   const c = cfg || loadAI()
   if (!isAiReady(c)) throw new Error('还没填 API Key，先到「设置」里配一下')
-  const res = await fetch(endpoint(c.base), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${c.key}`,
-    },
-    body: JSON.stringify({
-      model: c.model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-      stream: true,
-    }),
-    signal,
-  })
-  if (!res.ok) throw new Error(await errText(res))
+  for (let attempt = 0; ; attempt++) {
+    const g = guard(signal, timeoutMs)
+    try {
+      const res = await fetch(endpoint(c.base), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${c.key}`,
+        },
+        body: JSON.stringify({ model: c.model, ...body }),
+        signal: g.signal,
+      })
+      if (!res.ok) {
+        const e = new Error(await errText(res))
+        e.status = res.status
+        throw e
+      }
+      return await read(res)
+    } catch (e) {
+      if (attempt >= retry || !RETRY_STATUS.has(e.status) || signal?.aborted) throw e
+      await new Promise((r) => setTimeout(r, 700))
+    } finally {
+      g.done()
+    }
+  }
+}
 
+// 流式回包一行一个 `data: {...}`，这里只负责抽出来，怎么解析交给调用方
+async function readSse(res, onData) {
   const reader = res.body.getReader()
   const dec = new TextDecoder()
   let buf = ''
-  let full = ''
   for (;;) {
     const { value, done } = await reader.read()
     if (done) break
@@ -120,30 +132,71 @@ export async function chatStream(
       if (!s.startsWith('data:')) continue
       const payload = s.slice(5).trim()
       if (!payload || payload === '[DONE]') continue
-      let delta = ''
+      let j
       try {
-        delta = JSON.parse(payload)?.choices?.[0]?.delta?.content || ''
+        j = JSON.parse(payload)
       } catch {
         continue
       }
-      if (!delta) continue
-      full += delta
-      onDelta && onDelta(delta, full)
+      onData(j)
     }
   }
-  if (!full) throw new Error('模型没有返回内容')
-  return full
+}
+
+export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signal } = {}) {
+  return request(
+    cfg,
+    { messages, temperature, max_tokens: maxTokens, stream: false },
+    { signal },
+    async (res) => {
+      const json = await res.json()
+      const text = json?.choices?.[0]?.message?.content
+      if (!text) throw new Error('模型没有返回内容')
+      return text
+    },
+  )
+}
+
+// 同一套接口的流式版本：边收边显示，长答案不用干等
+export function chatStream(
+  messages,
+  { cfg, temperature = 0.3, maxTokens = 2000, onDelta, signal } = {},
+) {
+  let full = ''
+  return request(
+    cfg,
+    { messages, temperature, max_tokens: maxTokens, stream: true },
+    { signal },
+    async (res) => {
+      await readSse(res, (j) => {
+        const delta = j?.choices?.[0]?.delta?.content || ''
+        if (!delta) return
+        full += delta
+        onDelta && onDelta(delta, full)
+      })
+      if (!full) throw new Error('模型没有返回内容')
+      return full
+    },
+  )
 }
 
 // 模型有时会包 ```json 或者前后加解释，这里只取中间那个对象
 export function pickJson(text) {
-  let t = String(text).trim()
+  let t = String(text ?? '').trim()
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i)
   if (fence) t = fence[1].trim()
   const s = t.indexOf('{')
   const e = t.lastIndexOf('}')
   if (s >= 0 && e > s) t = t.slice(s, e + 1)
-  return JSON.parse(t)
+  try {
+    return JSON.parse(t)
+  } catch {}
+  // 模型常见手滑：对象 / 数组最后多一个逗号。修一下再试，别为这个让整轮白跑
+  try {
+    return JSON.parse(t.replace(/,\s*([}\]])/g, '$1'))
+  } catch {}
+  const cut = t.length > 2000 ? '（多半是输出被长度上限截断了，少给点内容再试）' : ''
+  throw new Error(`模型返回的不是合法 JSON${cut}，重试一次通常就好`)
 }
 
 /* ---------- 分类树 ---------- */
@@ -531,24 +584,24 @@ const FILE_RULE = `新建一篇，还是追加进已有的某一篇 —— 只�
 - 别为了「避免重复」把不同主题硬合并；也别因为搜到一篇同名空骨架就放弃新建 —— 空骨架只有在标题确实对得上时才填。
 - 拿不准就新建。`
 
-export async function fileAnswer({ question, answer, used = [], cfg } = {}) {
+export async function fileAnswer({ question, answer, used = [], cfg, signal } = {}) {
   const notes = state.notes
+  const MAX_DIGEST_NOTES = 100 // 归档时最多列这么多篇给模型挑，再多它也读不过来，只会稀释注意力
   const picked = []
   const seen = new Set()
-  // 被引用过的笔记排前面：这次问答大概率跟它们同主题
-  for (const s of used) {
-    const n = notes.find((x) => x.id === s.id)
-    if (n && !seen.has(n.id)) {
-      seen.add(n.id)
-      picked.push(n)
-    }
+  const take = (n) => {
+    if (!n || seen.has(n.id)) return
+    seen.add(n.id)
+    picked.push(n)
   }
+  // 引用过的笔记排最前：这次问答大概率跟它们同主题
+  for (const s of used) take(notes.find((x) => x.id === s.id))
+  // 其次是检索命中的：真正该「追加进去」的那篇往往在这里，
+  // 别让它因为数组顺序靠后而被截断掉，逼着模型去新建一篇重复的
+  for (const hit of searchNotes(question, { limit: 30 })) take(notes.find((x) => x.id === hit.id))
   for (const n of notes) {
-    if (picked.length >= 150) break
-    if (!seen.has(n.id)) {
-      seen.add(n.id)
-      picked.push(n)
-    }
+    if (picked.length >= MAX_DIGEST_NOTES) break
+    take(n)
   }
   const lines = picked.map((n) => {
     const { heads, lead } = noteDigest(n)
@@ -589,7 +642,7 @@ ${SECTION_SPEC}
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { cfg, temperature: 0.2, maxTokens: 4000 },
+    { cfg, temperature: 0.2, maxTokens: 4000, signal },
   )
   const data = pickJson(text)
   const blocks = normalizeBlocks(data.blocks)
@@ -622,6 +675,14 @@ export async function ping(cfg) {
 }
 
 /* ---------- L3：问整个知识库 ---------- */
+
+// 历史只带结论、不带过程：一条回答几千字原样塞回去，几轮就把上下文吃光了
+const trimHistory = (history = [], limit = 6, maxChars = 1500) =>
+  history.slice(-limit).map((m) => {
+    const c = str(m.content)
+    const over = m.role === 'assistant' && c.length > maxChars
+    return { role: m.role, content: over ? `${c.slice(0, maxChars)}…（后略）` : c }
+  })
 
 const ASK_SYSTEM = `你是这个私人知识库的问答助手。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记。
 
@@ -664,7 +725,7 @@ export async function askLibrary({
     : `资料（从用户知识库里检索出来的 ${used.length} 篇）：`
   const messages = [
     { role: 'system', content: `${strict ? ASK_STRICT : ASK_SYSTEM}\n\n${head}\n${ctx}` },
-    ...history.slice(-6),
+    ...trimHistory(history),
     { role: 'user', content: question },
   ]
 
@@ -827,57 +888,21 @@ export const TOOLS = [
 ]
 
 // 带 tools 的流式请求：正文边收边显示，顺带把 tool_calls 拼起来
-export async function chatStreamTools(
+export function chatStreamTools(
   messages,
-  { cfg, tools, temperature = 0.2, maxTokens = 2000, onDelta, signal } = {},
+  { cfg, tools, toolChoice, temperature = 0.2, maxTokens = 2000, onDelta, signal } = {},
 ) {
-  const c = cfg || loadAI()
-  if (!isAiReady(c)) throw new Error('还没填 API Key，先到「设置」里配一下')
-  const body = { model: c.model, messages, temperature, max_tokens: maxTokens, stream: true }
+  const body = { messages, temperature, max_tokens: maxTokens, stream: true }
   if (tools?.length) {
     body.tools = tools
-    body.tool_choice = 'auto'
+    body.tool_choice = toolChoice || 'auto'
   }
-  const res = await fetch(endpoint(c.base), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${c.key}`,
-    },
-    body: JSON.stringify(body),
-    signal,
-  })
-  if (!res.ok) {
-    const msg = await errText(res)
-    const e = new Error(msg)
-    // 有的兼容端点压根不认 tools / functions，这种就退回老的预检索流程
-    if (/tool|function/i.test(msg)) e.noTools = true
-    throw e
-  }
-
-  const reader = res.body.getReader()
-  const dec = new TextDecoder()
-  let buf = ''
-  let full = ''
   const calls = []
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buf += dec.decode(value, { stream: true })
-    const lines = buf.split('\n')
-    buf = lines.pop() || ''
-    for (const line of lines) {
-      const s = line.trim()
-      if (!s.startsWith('data:')) continue
-      const payload = s.slice(5).trim()
-      if (!payload || payload === '[DONE]') continue
-      let delta
-      try {
-        delta = JSON.parse(payload)?.choices?.[0]?.delta
-      } catch {
-        continue
-      }
-      if (!delta) continue
+  let full = ''
+  return request(cfg, body, { signal }, async (res) => {
+    await readSse(res, (j) => {
+      const delta = j?.choices?.[0]?.delta
+      if (!delta) return
       if (delta.content) {
         full += delta.content
         onDelta && onDelta(delta.content, full)
@@ -890,13 +915,18 @@ export async function chatStreamTools(
         if (tc.function?.name) cur.function.name += tc.function.name
         if (tc.function?.arguments) cur.function.arguments += tc.function.arguments
       }
-    }
-  }
-  const toolCalls = calls
-    .filter(Boolean)
-    .filter((x) => x.function.name)
-    .map((x, i) => ({ ...x, id: x.id || `call_${Date.now().toString(36)}_${i}` }))
-  return { text: full, toolCalls }
+    })
+    const toolCalls = calls
+      .filter(Boolean)
+      .filter((x) => x.function.name)
+      .map((x, i) => ({ ...x, id: x.id || `call_${Date.now().toString(36)}_${i}` }))
+    return { text: full, toolCalls }
+  }).catch((e) => {
+    // 端点压根不认 tools / functions 时才值得退回预检索流程：只认 4xx 里明确提到 tools 的报错，
+    // 别让「超时」「没返回内容」这种偶发错误把 agent 永久关掉
+    if (e.status >= 400 && e.status < 500 && /tool|function/i.test(e.message)) e.noTools = true
+    throw e
+  })
 }
 
 // 回答里的 [n] 按检索顺序编号：同一篇重复命中不重新编号
@@ -947,7 +977,7 @@ function runTool(ctx, call) {
     const empty = noteIsEmpty(note)
     return {
       content: `[${n}] ${noteText(note, { ids: true })}`,
-      summary: `📖 读《${note.title}》→ ${empty ? '空笔记' : '正文'} `,
+      summary: `📖 读《${note.title}》→ ${empty ? '空笔记' : '正文'}`,
     }
   }
 
@@ -1037,16 +1067,19 @@ export async function agentRun({
   if (!isAiReady(cfg || loadAI())) throw new Error('还没填 API Key，先到「设置」里配一下')
   const msgs = [...messages]
   const ctx = { refs: refs.map((r) => ({ ...r })), proposal: null }
-  let answer = ''
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const { text, toolCalls } = await chatStreamTools(msgs, {
+  const call = (extra) =>
+    chatStreamTools(msgs, {
       cfg,
       tools: TOOLS,
       temperature: strict ? 0.1 : 0.25,
       maxTokens,
       onDelta,
       signal,
+      ...extra,
     })
+  let answer = ''
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const { text, toolCalls } = await call()
     if (!toolCalls.length) {
       answer = text
       msgs.push({ role: 'assistant', content: text })
@@ -1057,12 +1090,14 @@ export async function agentRun({
       content: text || null,
       tool_calls: toolCalls.map((c) => ({ id: c.id, type: 'function', function: c.function })),
     })
-    for (const call of toolCalls) {
-      const out = runTool(ctx, call)
+    for (const c of toolCalls) {
+      const out = runTool(ctx, c)
       onTrace && onTrace(out.summary)
-      msgs.push({ role: 'tool', tool_call_id: call.id, content: out.content })
+      msgs.push({ role: 'tool', tool_call_id: c.id, content: out.content })
     }
   }
+  // 轮数用尽时再要一轮，这次不许调工具：拿已经查到的材料给个答案，比直接报错有用得多
+  if (!answer) answer = (await call({ toolChoice: 'none' })).text
   if (!answer) throw new Error(`模型查了 ${MAX_ROUNDS} 轮还没给出答案，换个问法试试`)
   return { text: answer, refs: ctx.refs, proposal: ctx.proposal, messages: msgs }
 }
@@ -1103,7 +1138,7 @@ const AGENT_STRICT = `${AGENT_RULES}
 export function askAgent({ question, history = [], cfg, strict = false, ...rest } = {}) {
   const messages = [
     { role: 'system', content: strict ? AGENT_STRICT : AGENT_RULES + AGENT_ANSWER },
-    ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+    ...trimHistory(history),
     { role: 'user', content: question },
   ]
   return agentRun({ messages, cfg, strict, ...rest })

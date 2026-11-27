@@ -2,9 +2,10 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { state, createNote, topicPath, flattenTopics } from '../lib/store.js'
-import { loadAI, saveAI, clearAI, isAiReady, composeNote, assembleBlocks, ping } from '../lib/ai.js'
+import { loadAI, saveAI, clearAI, isAiReady, composeNote, assembleBlocks, ping, SKILLS, loadSkillOff, saveSkillOff, loadSkillPref, saveSkillPref } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
 import AiAsk from './AiAsk.vue'
+import AiCross from './AiCross.vue'
 
 const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close'])
@@ -111,6 +112,22 @@ const forget = () => {
   cfg.value = loadAI()
   say('已清除')
 }
+
+// 技能开关只改「问库里」那套预设的显示与启用，不影响检索；默认那档永远开着
+const off = ref(loadSkillOff())
+const isOn = (id) => !id || !off.value.includes(id)
+const toggleSkill = (id) => {
+  if (!id) return
+  off.value = isOn(id) ? [...off.value, id] : off.value.filter((x) => x !== id)
+  saveSkillOff(off.value)
+  if (!isOn(loadSkillPref().id)) saveSkillPref({ id: '' })
+}
+
+const extra = ref(loadSkillPref().extra)
+const saveExtra = () => {
+  saveSkillPref({ extra: extra.value })
+  say('自定义指令已保存')
+}
 </script>
 
 <template>
@@ -124,6 +141,7 @@ const forget = () => {
       <div class="ai-tabs">
         <button :class="{ on: tab === 'compose' }" @click="tab = 'compose'">收进来</button>
         <button :class="{ on: tab === 'ask' }" @click="tab = 'ask'">问库里</button>
+        <button :class="{ on: tab === 'cross' }" @click="tab = 'cross'">跨笔记</button>
         <button :class="{ on: tab === 'setup' }" @click="tab = 'setup'">设置</button>
       </div>
 
@@ -184,6 +202,9 @@ const forget = () => {
       <!-- 问库里 -->
       <AiAsk v-else-if="tab === 'ask'" @close="emit('close')" @setup="tab = 'setup'" />
 
+      <!-- 跨笔记 -->
+      <AiCross v-else-if="tab === 'cross'" :open="open" @close="emit('close')" />
+
       <!-- 设置 -->
       <template v-else>
         <p class="ai-tip">
@@ -218,6 +239,32 @@ const forget = () => {
         </div>
 
         <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
+
+        <p class="ai-sub">技能</p>
+        <p class="ai-hint">
+          技能只换「问库里」的回答套路，检索和引用规则不变。关掉的技能不会出现在提问框上方。
+        </p>
+        <div class="sk-list">
+          <label v-for="s in SKILLS" :key="s.id" class="sk-row" :class="{ off: !isOn(s.id), fixed: !s.id }">
+            <input type="checkbox" :checked="isOn(s.id)" :disabled="!s.id" @change="toggleSkill(s.id)" />
+            <span class="sk-name">{{ s.name }}</span>
+            <span class="sk-desc">{{ s.desc }}</span>
+          </label>
+        </div>
+
+        <p class="ai-sub">自定义指令</p>
+        <p class="ai-hint">
+          每次问库里都会带上这段，优先级高于技能预设。写你希望它一直守的规矩，比如「别用『赋能』这类词」「答完一定给一个面试口径」。
+        </p>
+        <textarea
+          v-model="extra"
+          class="ai-area"
+          rows="3"
+          placeholder="例：回答里不要出现英文缩写，第一次出现时给中文全称"
+        />
+        <div class="ai-acts">
+          <button @click="saveExtra">保存指令</button>
+        </div>
 
         <p class="ai-sub">视觉模型（识图用，可选）</p>
         <p class="ai-hint">

@@ -9,6 +9,7 @@ import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { FILE_RULE } from './compose.js'
 import { trimHistory } from './ask.js'
 import { NO_FABRICATE, NO_FABRICATE_WRITE } from './prompts.js'
+import { buildSystem } from './skills.js'
 
 /* ---------- L3.5：agent —— 模型自己查、自己读、自己归档 ---------- */
 
@@ -364,9 +365,10 @@ const AGENT_STRICT = `${AGENT_RULES}
 - 中文，先给结论再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。`
 
 // history 只放最近几轮问答，别把整段对话灌进去
-export function askAgent({ question, history = [], cfg, strict = false, ...rest } = {}) {
+export function askAgent({ question, history = [], cfg, strict = false, skill, extra, ...rest } = {}) {
+  const base = strict ? AGENT_STRICT : AGENT_RULES + AGENT_ANSWER
   const messages = [
-    { role: 'system', content: strict ? AGENT_STRICT : AGENT_RULES + AGENT_ANSWER },
+    { role: 'system', content: buildSystem(base, { skill, extra }) },
     ...trimHistory(history),
     { role: 'user', content: question },
   ]

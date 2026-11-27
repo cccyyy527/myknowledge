@@ -4,6 +4,7 @@ import { buildContext } from '../retrieve.js'
 import { chatStream } from './client.js'
 import { str, OUTSIDE_MARK } from './schema.js'
 import { NO_FABRICATE } from './prompts.js'
+import { buildSystem } from './skills.js'
 
 /* ---------- L3：问整个知识库 ---------- */
 
@@ -42,6 +43,8 @@ export async function askLibrary({
   history = [],
   cfg,
   strict = false,
+  skill,
+  extra,
   onDelta,
   signal,
 } = {}) {
@@ -54,8 +57,9 @@ export async function askLibrary({
   const head = fallback
     ? `资料（没有明显命中，下面是最近改过的几篇；如果都不相关就直说库里没有）：`
     : `资料（从用户知识库里检索出来的 ${used.length} 篇）：`
+  const base = strict ? ASK_STRICT : ASK_SYSTEM
   const messages = [
-    { role: 'system', content: `${strict ? ASK_STRICT : ASK_SYSTEM}\n\n${head}\n${ctx}` },
+    { role: 'system', content: buildSystem(`${base}\n\n${head}\n${ctx}`, { skill, extra }) },
     ...trimHistory(history),
     { role: 'user', content: question },
   ]

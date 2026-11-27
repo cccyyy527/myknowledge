@@ -1,6 +1,7 @@
 // 整篇改写：先算一份结构诊断，模型只输出操作列表，落库前再按块 id 校验一遍
 
-import { newBlockId } from '../store.js'
+import { newBlockId, state } from '../store.js'
+import { searchNotes, blockText } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks, assembleBlocks } from './schema.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
@@ -135,6 +136,36 @@ export function diagnose(note) {
 
 /* ---------- 让模型出改动 ---------- */
 
+// 改一篇时不该闭着眼：把库里相邻的几篇摘要塞进 prompt，模型才知道哪句该指过去、哪句跟别人说法打架
+export function relatedNotes(note, { limit = 5 } = {}) {
+  if (!note) return []
+  const heads = (note.blocks || [])
+    .filter((b) => b.type === 'heading' && b.level === 2)
+    .map((b) => str(b.text))
+  const probe = [note.title, ...(note.tags || []), ...heads].filter(Boolean).join(' ')
+  const extra = (note.blocks || [])
+    .filter((b) => b.type !== 'heading')
+    .slice(0, 8)
+    .map((b) => blockText(b))
+    .join(' ')
+  if (!probe.trim()) return []
+  return searchNotes(probe, { limit: limit + 4, extra })
+    .filter((x) => x.id !== note.id)
+    .slice(0, limit)
+    .map((x) => {
+      const full = state.notes.find((n) => n.id === x.id)
+      const bits = (full?.blocks || [])
+        .filter((b) => b.type !== 'heading')
+        .map((b) => blockText(b).replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+      const text = bits
+        .slice(0, 4)
+        .map((t) => (t.length > 110 ? `${t.slice(0, 110)}…` : t))
+        .join(' / ')
+      return { id: x.id, title: x.title, path: x.path, text }
+    })
+}
+
 const REVISE_SYSTEM = `你在改一篇数据分析面试知识笔记。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
 
 ${BLOCK_SPEC}
@@ -160,17 +191,32 @@ ${SECTION_SPEC}
 - 先读结构诊断再动手。诊断点出来的空段、连续同类型、重复块、放错段，都可以直接处理。
 - 但 keep / move 的块文字必须一字不改 —— 不许顺手润色、不许改措辞。想改文字就走 replace，让用户在面板上看得见。
 - 允许重排、允许合并同类块、允许把过长的块拆成几块。
+- 库里相邻的笔记只给了摘要，用来做两件事：① 那边已经写透的结论，这篇别再造一遍，确实相关就在块里用 [[笔记完整标题]] 指过去（标题一字不差，写错就跳不过去）；② 这篇跟相邻笔记说法不一致时，不要自己挑一个，写进 advice 留给用户判断。
 - ${NO_FABRICATE_WRITE}
 - 不要输出 heading 块，段落由 section 字段决定。
 - title 只在指令明确要求改标题时才给，否则省略这个字段。
-只输出一个 JSON 对象：{"title":"...","ops":[...]}`
+- advice 只有一句话：跨笔记那部分值得用户注意的事（该指过去的、说法冲突的）。没有就省略。
+只输出一个 JSON 对象：{"title":"...","advice":"...","ops":[...]}`
 
-export async function reviseNote({ note, instruction, cfg } = {}) {
+export async function reviseNote({ note, instruction, cfg, related } = {}) {
   const cur = sectioned(note).map((r) => ({ ...r.block, section: r.section }))
+  const rel = related === undefined ? relatedNotes(note) : arr(related)
+  const relText = rel.length
+    ? rel
+        .map(
+          (r, i) =>
+            `${i + 1}. 《${r.title}》（${r.path || '未归类'}）${r.text ? `：${r.text}` : '（这篇还是空的）'}`,
+        )
+        .join('\n')
+    : '（库里没有明显相邻的笔记，这篇可以独立成篇）'
+
   const user = `笔记标题：${note?.title || ''}
 
 结构诊断（程序算的，比肉眼准）：
 ${diagnose(note).text}
+
+库里相邻的笔记：
+${relText}
 
 现有块（id 要原样引用）：
 ${JSON.stringify(cur)}
@@ -187,6 +233,8 @@ ${JSON.stringify(cur)}
   const data = pickJson(text)
   return {
     title: str(data.title),
+    advice: str(data.advice),
+    related: rel,
     ops: normalizeOps(data.ops || data.blocks, note),
   }
 }
@@ -260,9 +308,12 @@ const compact = (list) => {
   return out
 }
 
-// 按用户勾过的行改写笔记；heading 由 assembleBlocks 重新生成
+// 按用户勾过的行改写笔记；heading 由 assembleBlocks 重新生成。
+// 顺手记一份 marks（块 id → 改/移/新），预览版靠它给成品上色；drop 掉的块不可能出现在成品里，另开一个集合
 export function applyOps(note, rows) {
-  if (!note) return
+  const marks = new Map()
+  const dropped = new Set()
+  if (!note) return { marks, dropped }
   const secOf = sectionsOf(note)
   const byId = new Map(sectioned(note).map((r) => [r.block.id, r.block]))
   const items = []
@@ -280,16 +331,26 @@ export function applyOps(note, rows) {
       const b = byId.get(r.id)
       if (!b || done.has(r.id)) continue
       done.add(r.id)
+      if (r.checked) marks.set(r.id, 'move')
       push(r.checked ? r.section : secOf.get(r.id), b)
     } else if (r.op === 'replace') {
       if (done.has(r.id)) continue
       done.add(r.id)
-      if (r.checked) push(r.section, { ...r.block, id: r.id })
-      else push(secOf.get(r.id), byId.get(r.id))
+      if (r.checked) {
+        marks.set(r.id, 'replace')
+        push(r.section, { ...r.block, id: r.id })
+      } else push(secOf.get(r.id), byId.get(r.id))
     } else if (r.op === 'add') {
-      if (r.checked) push(r.section, { ...r.block, id: newBlockId() })
+      if (r.checked) {
+        const id = newBlockId()
+        push(r.section, { ...r.block, id })
+        marks.set(id, 'add')
+      }
     } else if (r.op === 'drop') {
-      if (r.checked) done.add(r.id)
+      if (r.checked) {
+        done.add(r.id)
+        dropped.add(r.id)
+      }
     }
   }
   // 模型漏掉的原块按原样留住，别悄悄吃掉用户写的东西
@@ -298,4 +359,5 @@ export function applyOps(note, rows) {
     push(secOf.get(id), b)
   }
   note.blocks = compact(assembleBlocks(items))
+  return { marks, dropped }
 }

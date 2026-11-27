@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, stripMark, SECTIONS } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, stripMark, SECTIONS, enabledSkills, loadSkillPref, saveSkillPref } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
 import { attachRefs, cleanBlocks, plainBlocks } from '../lib/draft.js'
 import {
@@ -55,6 +55,16 @@ watch(strict, (v) => {
 
 const ready = computed(() => isAiReady(loadAI()))
 const stats = computed(() => libraryStats())
+
+// 技能只影响语气和回答套路，不影响检索；选中的存在 localStorage，下次进来还用它
+const skills = enabledSkills()
+const skill = ref(loadSkillPref().id)
+const pickSkill = (id) => {
+  skill.value = id
+  saveSkillPref({ id })
+}
+const curSkill = computed(() => skills.find((s) => s.id === skill.value))
+const skillName = (id) => (id ? skills.find((s) => s.id === id)?.name || '' : '')
 
 // 端点不一定支持 tools（DeepSeek 支持，自建反代常常不支持）：
 // 试崩一次就记住，后面直接走老的预检索流程，别每问一次都白等一轮
@@ -147,6 +157,7 @@ const ask = async (preset) => {
     err: '',
     fallback: false,
     strict: strict.value,
+    skill: skill.value,
     messages: null,
     at: Date.now(),
   })
@@ -164,6 +175,7 @@ const ask = async (preset) => {
           history,
           cfg: loadAI(),
           strict: strict.value,
+          skill: skill.value,
           signal: ctrl.signal,
           onDelta: (_, full) => {
             turn.a = full
@@ -201,6 +213,7 @@ const ask = async (preset) => {
         history,
         cfg: loadAI(),
         strict: strict.value,
+        skill: skill.value,
         signal: ctrl.signal,
         onDelta: (_, full) => {
           turn.a = full
@@ -466,13 +479,31 @@ const doSave = () => {
       </label>
     </div>
 
+    <div v-if="skills.length > 1" class="ask-skills">
+      <span class="ask-skills-lb">技能</span>
+      <button
+        v-for="s in skills"
+        :key="s.id"
+        class="ask-skill"
+        :class="{ on: skill === s.id }"
+        :title="s.desc"
+        @click="pickSkill(s.id)"
+      >
+        {{ s.name }}
+      </button>
+      <span v-if="curSkill && curSkill.system" class="ask-skill-d">{{ curSkill.desc }}</span>
+    </div>
+
     <div v-if="!turns.length" class="ask-sugs">
       <button v-for="s in SUGGEST" :key="s" class="ask-sug" @click="ask(s)">{{ s }}</button>
     </div>
 
     <div ref="box" class="ask-thread" @click="onThreadClick">
       <div v-for="(t, i) in turns" :key="i" class="ask-turn">
-        <div class="ask-q">{{ t.q }}</div>
+        <div class="ask-q">
+          <span v-if="skillName(t.skill)" class="ask-q-sk">{{ skillName(t.skill) }}</span>
+          {{ t.q }}
+        </div>
         <div class="ask-a">
           <p v-if="t.err" class="ai-msg bad">{{ t.err }}</p>
           <template v-else>

@@ -25,6 +25,8 @@ const msg = ref('')
 const bad = ref(false)
 const rows = ref([])
 const titleHint = ref('')
+const advice = ref('')
+const related = ref([])
 
 const say = (t, isBad = false) => {
   msg.value = t
@@ -38,6 +40,9 @@ watch(
     cfg.value = loadAI()
     rows.value = []
     titleHint.value = ''
+    advice.value = ''
+    related.value = []
+    view.value = 'preview'
     showKeep.value = false
     say('')
     if (!isAiReady(cfg.value)) say('还没配 API Key，先在顶栏 ✨ → 设置 里填一下', true)
@@ -67,10 +72,15 @@ const run = async (preset) => {
   busy.value = true
   rows.value = []
   titleHint.value = ''
+  advice.value = ''
+  related.value = []
+  view.value = 'preview'
   say('')
   try {
     const r = await reviseNote({ note: props.note, instruction: ins, cfg: cfg.value })
     titleHint.value = r.title
+    advice.value = r.advice || ''
+    related.value = r.related || []
     rows.value = decorate(r.ops)
     if (!r.ops.length) say('模型没给出可用的改动，换个说法再试', true)
   } catch (e) {
@@ -96,6 +106,38 @@ const unchecked = computed(() => pickable.value.filter((r) => !r.checked).length
 const setAll = (v) => pickable.value.forEach((r) => (r.checked = v))
 
 const secName = (id) => (SECTIONS.find((s) => s.id === id) || SECTIONS[0]).title
+
+/* ---------- 预览成品：左原文右改后 ---------- */
+
+const view = ref('preview')
+
+// 深拷贝一份跑 applyOps，拿到的就是「按现在勾选写进去」的样子。
+// 顺带要 marks（哪几块动了）和 dropped（哪几块被删了），否则预览只是一堆看不出差别的字
+const preview = computed(() => {
+  if (!props.note || !rows.value.length) return null
+  const draft = JSON.parse(JSON.stringify({ title: props.note.title, blocks: props.note.blocks }))
+  const { marks, dropped } = applyOps(
+    draft,
+    rows.value.map((r) => ({ ...r })),
+  )
+  return { blocks: draft.blocks || [], marks, dropped }
+})
+
+const pvStat = computed(() => {
+  const p = preview.value
+  if (!p) return { src: 0, total: 0, secs: 0, changed: 0, dropped: 0 }
+  const secs = p.blocks.filter((b) => b.type === 'heading' && b.level === 2).length
+  const srcSecs = (props.note?.blocks || []).filter((b) => b.type === 'heading' && b.level === 2).length
+  return {
+    src: (props.note?.blocks || []).length - srcSecs,
+    total: p.blocks.length - secs,
+    secs,
+    changed: p.marks.size,
+    dropped: p.dropped.size,
+  }
+})
+
+const markOf = (id) => (preview.value && preview.value.marks.get(id)) || ''
 
 const apply = () => {
   if (!props.note || !rows.value.length) return
@@ -191,39 +233,90 @@ const apply = () => {
           </span>
         </div>
 
-        <button v-if="counts.keep" class="df-more" @click="showKeep = !showKeep">
-          <template v-if="showKeep">收起 {{ counts.keep }} 块没改动的</template>
-          <template v-else>下面只列改动，展开还能看 {{ counts.keep }} 块没改动的</template>
-        </button>
+        <p v-if="advice" class="ai-msg"><strong>跨笔记：</strong>{{ advice }}</p>
+        <p v-if="related.length" class="ai-tip ai-rel">
+          这篇旁边还有：{{ related.map((r) => r.title).join('、') }}
+        </p>
 
-        <div class="ai-preview ai-diff">
-          <div v-for="(r, i) in visibleRows" :key="i" class="df-row" :class="'df-' + r.op">
-            <div class="df-tag">
-              <template v-if="r.op === 'keep'">保留</template>
-              <template v-else>
-                <input v-model="r.checked" type="checkbox" />
-                <span>{{
-                  r.op === 'replace' ? '改' : r.op === 'move' ? '移' : r.op === 'add' ? '新' : '删'
-                }}</span>
-              </template>
+        <div class="pv-switch">
+          <button :class="{ on: view === 'preview' }" @click="view = 'preview'">预览成品</button>
+          <button :class="{ on: view === 'diff' }" @click="view = 'diff'">逐条改动</button>
+          <span class="pv-sum">
+            改后 {{ pvStat.secs }} 段 / {{ pvStat.total }} 块 —— 动了 {{ pvStat.changed }} 块<template
+              v-if="pvStat.dropped"
+              >，删 {{ pvStat.dropped }} 块</template
+            >
+          </span>
+        </div>
+
+        <div v-if="view === 'preview'" class="pv-split">
+          <div class="pv-pane">
+            <div class="pv-head">
+              <span>原文</span><span class="pv-n">{{ pvStat.src }} 块</span>
             </div>
-            <div class="df-body">
-              <p v-if="r.op === 'move'" class="df-from">
-                {{ secName(r.oldSection) }} → {{ secName(r.section) }}
-              </p>
-              <BlockView v-if="r.op === 'keep' || r.op === 'drop'" :block="r.block" expand />
-              <template v-else-if="r.op === 'replace'">
-                <div v-if="r.old" class="df-old">
-                  <BlockView :block="r.old" expand />
-                </div>
-                <div class="df-new">
-                  <BlockView :block="{ ...r.block, id: r.id + '-pv' }" expand />
-                </div>
-              </template>
-              <BlockView v-else :block="{ ...r.block, id: 'df-' + r.op + '-' + i }" expand />
+            <div class="pv-body">
+              <div
+                v-for="b in note?.blocks || []"
+                :key="b.id"
+                class="pv-blk"
+                :class="{ 'pv-gone': preview && preview.dropped.has(b.id) }"
+              >
+                <BlockView :block="b" expand />
+              </div>
+            </div>
+          </div>
+          <div class="pv-pane pv-new">
+            <div class="pv-head">
+              <span>改后</span><span class="pv-n">{{ pvStat.total }} 块</span>
+            </div>
+            <div class="pv-body">
+              <div
+                v-for="b in preview?.blocks || []"
+                :key="b.id"
+                class="pv-blk"
+                :class="markOf(b.id) ? 'pv-' + markOf(b.id) : ''"
+              >
+                <BlockView :block="b" expand />
+              </div>
             </div>
           </div>
         </div>
+
+        <template v-else>
+          <button v-if="counts.keep" class="df-more" @click="showKeep = !showKeep">
+            <template v-if="showKeep">收起 {{ counts.keep }} 块没改动的</template>
+            <template v-else>下面只列改动，展开还能看 {{ counts.keep }} 块没改动的</template>
+          </button>
+
+          <div class="ai-preview ai-diff">
+            <div v-for="(r, i) in visibleRows" :key="i" class="df-row" :class="'df-' + r.op">
+              <div class="df-tag">
+                <template v-if="r.op === 'keep'">保留</template>
+                <template v-else>
+                  <input v-model="r.checked" type="checkbox" />
+                  <span>{{
+                    r.op === 'replace' ? '改' : r.op === 'move' ? '移' : r.op === 'add' ? '新' : '删'
+                  }}</span>
+                </template>
+              </div>
+              <div class="df-body">
+                <p v-if="r.op === 'move'" class="df-from">
+                  {{ secName(r.oldSection) }} → {{ secName(r.section) }}
+                </p>
+                <BlockView v-if="r.op === 'keep' || r.op === 'drop'" :block="r.block" expand />
+                <template v-else-if="r.op === 'replace'">
+                  <div v-if="r.old" class="df-old">
+                    <BlockView :block="r.old" expand />
+                  </div>
+                  <div class="df-new">
+                    <BlockView :block="{ ...r.block, id: r.id + '-pv' }" expand />
+                  </div>
+                </template>
+                <BlockView v-else :block="{ ...r.block, id: 'df-' + r.op + '-' + i }" expand />
+              </div>
+            </div>
+          </div>
+        </template>
 
         <div class="ai-acts">
           <button class="ai-primary" @click="apply">写入笔记</button>

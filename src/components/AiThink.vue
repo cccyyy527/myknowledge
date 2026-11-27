@@ -3,6 +3,7 @@
 const props = defineProps({
   modelValue: Boolean,
   hint: { type: String, default: '' },
+  label: { type: String, default: '深度思考' },
 })
 const emit = defineEmits(['update:modelValue'])
 </script>
@@ -14,6 +15,6 @@ const emit = defineEmits(['update:modelValue'])
       :checked="modelValue"
       @change="emit('update:modelValue', $event.target.checked)"
     />
-    <span>深度思考</span>
+    <span>{{ label }}</span>
   </label>
 </template>

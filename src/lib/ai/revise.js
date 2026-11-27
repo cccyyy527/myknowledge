@@ -167,17 +167,17 @@ export function relatedNotes(note, { limit = 5 } = {}) {
     })
 }
 
-// 外部材料只截断不丢弃：超长的整篇转载贴进来，头和尾最有信息，中间往往是废话
-const MATERIAL_CAP = 12000
-
-const materialBlock = (material) => {
-  const t = str(material).trim()
-  if (!t) return ''
-  const cut = t.length > MATERIAL_CAP ? `${t.slice(0, MATERIAL_CAP)}\n…（材料过长，后面已截掉）` : t
-  return `\n外部材料（用户从库外粘来的，不是这篇已有的内容）：\n<<<\n${cut}\n>>>\n`
+// 多轮：把前几轮的指令带给模型，免得它把已经改好的地方又改回去
+const roundsText = (history) => {
+  const list = arr(history)
+    .map((x) => str(x).trim())
+    .filter(Boolean)
+    .slice(-4)
+  if (!list.length) return ''
+  return `\n前几轮已经改过这些（下面的块就是改完的样子，别重复做，也别撤销）：\n${list.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
 }
 
-const reviseSystem = (allowSplit, hasMaterial) => `你在改一篇数据分析面试知识笔记。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
+const reviseSystem = (allowSplit, outside) => `你在改一篇数据分析面试知识笔记。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
 
 ${BLOCK_SPEC}
 ${SECTION_SPEC}
@@ -200,21 +200,29 @@ ${allowSplit ? '- {"op":"split","ids":["b-x","b-y"],"to":{"title":"新篇标题"
 
 规则：
 - 先读结构诊断再动手。诊断点出来的空段、连续同类型、重复块、放错段，都可以直接处理。
+- 用户可能已经跟你改过几轮：现有块就是上一轮的成品。只做这一轮要求的微调，别把它改好的地方又改回去，也别重复做完的事。
 - 但 keep / move 的块文字必须一字不改 —— 不许顺手润色、不许改措辞。想改文字就走 replace，让用户在面板上看得见。
 - 允许重排、允许合并同类块、允许把过长的块拆成几块。
 - 库里相邻的笔记只给了摘要，用来做两件事：① 那边已经写透的结论，这篇别再造一遍，确实相关就在块里用 [[笔记完整标题]] 指过去（标题一字不差，写错就跳不过去）；② 这篇跟相邻笔记说法不一致时，不要自己挑一个，写进 advice 留给用户判断。
 - ${NO_FABRICATE_WRITE}
-${hasMaterial ? `- 「外部材料」是用户从库外粘来的资料，只用它做两件事：补这篇缺的内容、修正这篇里跟材料不符的说法。跟这篇主题无关的部分直接丢掉，不要整段照搬。
-- 材料里的数字、定义、结论原样搬，不许改口径，也不许补材料里没有的数字；材料没给来源、链接、论文名就不要自己写一个。
-- 材料跟笔记说法冲突、又判断不了谁对，不要自己挑一个，写进 advice 让用户决定。
+${outside ? `- 用户允许你用笔记之外的知识补内容。笔记里没写清楚、或者明显缺的那一块，可以直接写进去，但要写成能站住的结论：写清成立条件、适用范围，别只丢一句结论。
+- 这类库外内容在对应的 op 上带 "outside":true，用户能在面板上逐条看到哪些是新知识、再决定要不要。只在 add / replace 上标，keep / move 不用标。
+- 库外内容也要守上面的规矩：不要编具体数字、论文名、公司案例；拿不准的就用 todo 块占位，别硬写。
 ` : ''}- 不要输出 heading 块，段落由 section 字段决定。
 - title 只在指令明确要求改标题时才给，否则省略这个字段。
 - advice 只有一句话：跨笔记那部分值得用户注意的事（该指过去的、说法冲突的）。没有就省略。${allowSplit ? '\n- split 要克制：只有「这篇真正在讲两件事、拆开后各自更完整」才用。为了看起来整齐而拆细，只会让库更碎。' : ''}
 只输出一个 JSON 对象：{"title":"...","advice":"...","ops":[...]}`
 
-export async function reviseNote({ note, instruction, cfg, related, allowSplit = false, material = '' } = {}) {
+export async function reviseNote({
+  note,
+  instruction,
+  cfg,
+  related,
+  allowSplit = false,
+  outside = false,
+  history = [],
+} = {}) {
   const cur = sectioned(note).map((r) => ({ ...r.block, section: r.section }))
-  const mat = str(material).trim()
   const rel = related === undefined ? relatedNotes(note) : arr(related)
   const relText = rel.length
     ? rel
@@ -235,12 +243,12 @@ ${relText}
 
 现有块（id 要原样引用）：
 ${JSON.stringify(cur)}
-${allowSplit ? `\n分类树（split 的 topicId 从这里原样复制）：\n${topicCatalog()}\n` : ''}${materialBlock(mat)}
-想要的改动：${str(instruction).trim() || '用这份外部材料把这篇补全，材料里跟这篇无关的部分不要搬进来'}`
+${allowSplit ? `\n分类树（split 的 topicId 从这里原样复制）：\n${topicCatalog()}\n` : ''}${roundsText(history)}
+想要的改动：${str(instruction).trim() || '按结构诊断把这篇理顺，缺的段落补上'}`
 
   const text = await chat(
     [
-      { role: 'system', content: reviseSystem(allowSplit, !!mat) },
+      { role: 'system', content: reviseSystem(allowSplit, outside) },
       { role: 'user', content: user },
     ],
     { cfg, temperature: 0.3, maxTokens: 4000 },
@@ -335,9 +343,11 @@ export function normalizeOps(raw, note) {
     const section = str(item.section) || str(inner.section) || (op === 'replace' ? secOf.get(id) : '')
     const [b] = normalizeBlocks([{ ...inner, section }])
     if (!b) continue
-    const { id: _tmp, ...rest } = b
-    if (op === 'replace') out.push({ op, id, section: b.section, block: rest, old: all.get(id) })
-    else out.push({ op: 'add', section: b.section, block: rest })
+    const { id: _tmp, outside: _o, ...rest } = b
+    // 库外标记挂在 op 上、不进块：写进去之后就是笔记自己的内容了，不需要长期带着「这是 AI 补的」
+    const flag = item.outside === true || inner.outside === true ? { outside: true } : {}
+    if (op === 'replace') out.push({ op, id, section: b.section, block: rest, old: all.get(id), ...flag })
+    else out.push({ op: 'add', section: b.section, block: rest, ...flag })
   }
   return out
 }

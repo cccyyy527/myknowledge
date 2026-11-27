@@ -23,10 +23,9 @@ const PRESETS = [
 const cfg = ref(loadAI())
 // 整篇重排是最该开思考的场景：要判断哪块放错段、哪些重复，慢一点换准一点
 const think = ref(false)
+// 是否允许模型用笔记之外的知识补内容；默认不许，打开的那些块在面板上标「库外」
+const outside = ref(false)
 const instruction = ref('')
-// 外部材料：用户从库外粘来的正文（转载、论文摘要、同事的文档），只用来补缺和纠错
-const material = ref('')
-const showMat = ref(false)
 const busy = ref(false)
 const msg = ref('')
 const bad = ref(false)
@@ -35,9 +34,30 @@ const titleHint = ref('')
 const advice = ref('')
 const related = ref([])
 
+// 多轮对话：每一轮都在「上一轮你调完的样子」上继续改，而不是回最初那版重来
+const base = ref(null) // { title, blocks }，null = 还没跑过
+const rounds = ref([]) // 前几轮的指令，带给模型免得它重复做同一件事
+const title = ref('')
+
+const clone = (v) => JSON.parse(JSON.stringify(v))
+
 const say = (t, isBad = false) => {
   msg.value = t
   bad.value = isBad
+}
+
+const restart = () => {
+  base.value = null
+  rounds.value = []
+  title.value = ''
+  rows.value = []
+  titleHint.value = ''
+  advice.value = ''
+  related.value = []
+  instruction.value = ''
+  view.value = 'preview'
+  showKeep.value = false
+  say('')
 }
 
 watch(
@@ -46,45 +66,44 @@ watch(
     if (!v) return
     cfg.value = loadAI()
     think.value = cfg.value.thinking === 'on'
-    rows.value = []
-    titleHint.value = ''
-    advice.value = ''
-    related.value = []
-    view.value = 'preview'
-    showKeep.value = false
-    showMat.value = false
-    material.value = ''
-    say('')
+    restart()
     if (!isAiReady(cfg.value)) say('还没配 API Key，先在顶栏 ✨ → 设置 里填一下', true)
   },
 )
 
 const ready = computed(() => isAiReady(cfg.value))
-// 指令和材料有一样就能跑
-const canRun = computed(() => !!(instruction.value.trim() || material.value.trim()))
+
+// 这一轮要动的那版笔记：有上一轮就用它的成品，否则用笔记原文
+const work = computed(() => {
+  if (base.value) return base.value
+  if (!props.note) return null
+  return { title: props.note.title, blocks: props.note.blocks }
+})
 
 // 整篇助手只按固定五段重排：自定义小节会被并回去，先提醒一句
 const customSecs = computed(() => {
   const known = new Set(SECTIONS.map((s) => s.title))
-  return (props.note?.blocks || [])
+  return (work.value?.blocks || [])
     .filter((b) => b.type === 'heading' && b.level === 2 && b.text && !known.has(b.text))
     .map((b) => b.text)
 })
 
 // 结构诊断：面板上先给用户看一遍「哪里歪了」，也顺便解释 AI 动手的依据
-const diag = computed(() => (props.note ? diagnose(props.note) : null))
+const diag = computed(() => (work.value ? diagnose(work.value) : null))
 
 // 改动和新增默认勾上，删除默认不勾 —— 抹内容得人手点一下
 const decorate = (ops) =>
   ops.map((o) => ({ ...o, checked: o.op === 'replace' || o.op === 'add' || o.op === 'move' }))
 
 const run = async (preset) => {
-  // 只贴了材料没写指令也算有效：默认按「把材料吃进这篇」处理
-  const ins =
-    String(preset ?? instruction.value).trim() ||
-    (material.value.trim() ? '用这份外部材料把这篇补全，材料里跟这篇无关的部分不要搬进来' : '')
-  if (!ins || busy.value || !props.note) return
+  const ins = String(preset ?? instruction.value).trim()
+  if (!ins || busy.value || !work.value) return
   busy.value = true
+  // 先把手头这版冻住（带上你勾掉/没勾的选择），这一轮就在它上面继续改
+  const cur = preview.value
+  const curTitle = title.value || work.value.title
+  const keepRows = rows.value.length > 0
+  if (keepRows && cur) base.value = { title: curTitle, blocks: cur.blocks.map((b) => ({ ...b })) }
   rows.value = []
   titleHint.value = ''
   advice.value = ''
@@ -93,15 +112,22 @@ const run = async (preset) => {
   say('')
   try {
     const r = await reviseNote({
-      note: props.note,
+      note: {
+        title: curTitle,
+        blocks: keepRows && cur ? cur.blocks : work.value.blocks,
+      },
       instruction: ins,
-      material: material.value,
+      outside: outside.value,
+      history: rounds.value,
       cfg: { ...cfg.value, thinking: think.value ? 'on' : 'off' },
     })
+    if (r.title) title.value = r.title
     titleHint.value = r.title
     advice.value = r.advice || ''
     related.value = r.related || []
     rows.value = decorate(r.ops)
+    rounds.value = [...rounds.value, ins]
+    instruction.value = ''
     if (!r.ops.length) say('模型没给出可用的改动，换个说法再试', true)
   } catch (e) {
     say(String(e.message || e), true)
@@ -134,8 +160,8 @@ const view = ref('preview')
 // 深拷贝一份跑 applyOps，拿到的就是「按现在勾选写进去」的样子。
 // 顺带要 marks（哪几块动了）和 dropped（哪几块被删了），否则预览只是一堆看不出差别的字
 const preview = computed(() => {
-  if (!props.note || !rows.value.length) return null
-  const draft = JSON.parse(JSON.stringify({ title: props.note.title, blocks: props.note.blocks }))
+  if (!work.value) return null
+  const draft = clone({ title: work.value.title, blocks: work.value.blocks })
   const { marks, dropped } = applyOps(
     draft,
     rows.value.map((r) => ({ ...r })),
@@ -159,10 +185,15 @@ const pvStat = computed(() => {
 
 const markOf = (id) => (preview.value && preview.value.marks.get(id)) || ''
 
+const canApply = computed(() => Boolean(work.value) && (rows.value.length > 0 || Boolean(base.value)))
+
 const apply = () => {
-  if (!props.note || !rows.value.length) return
-  if (titleHint.value) props.note.title = titleHint.value
-  applyOps(props.note, rows.value)
+  if (!props.note || !canApply.value) return
+  const next = preview.value
+  if (title.value) props.note.title = title.value
+  props.note.blocks = next.blocks.map((b) => ({ ...b }))
+  base.value = null
+  rounds.value = []
   rows.value = []
   emit('applied')
   emit('close')
@@ -181,7 +212,7 @@ const apply = () => {
         说一句要怎么改，AI 把这篇当一份稿子重排。改动会先列出来（挪 / 改 / 新 / 删），你勾哪些就写哪些；
         懒得逐个勾就点「全部接受」（删除默认不勾，抹内容得自己点一下）。
         段落标题由程序按「核心结论 / 推导 / 高频问法 / 坑 / 待补」重新生成，你自己加的小节会被并回去。
-        手边有库外的文章或文档，点「＋ 外部材料」整段粘进来，AI 会只取跟这篇相关的部分补缺、纠错。
+        默认只用这篇现有的内容重排；想让 AI 用自己知道的东西补上空白处，勾「库外知识」，补进去的块会单独标出来。
       </p>
 
       <div v-if="diag && diag.total" class="ai-struct">
@@ -195,32 +226,21 @@ const apply = () => {
         >
       </p>
 
+      <p v-if="rounds.length" class="ai-rounds">
+        <span v-for="(r, i) in rounds" :key="i" class="rnd">第 {{ i + 1 }} 轮：{{ r }}</span>
+        <button class="ai-bulk-btn" :disabled="busy" @click="restart">回到最初那版</button>
+      </p>
+
       <textarea
         v-model="instruction"
         class="ai-area"
         rows="3"
-        placeholder="例：核心结论拆成 3 条断言；每个公式后面补一句直觉解释；把最后那段空话删掉"
+        :placeholder="
+          rounds.length
+            ? '接着上一轮说：例，第 2 条再具体一点；刚才删的坑挪到「坑」那段而不是删掉；把标题改成…'
+            : '例：核心结论拆成 3 条断言；每个公式后面补一句直觉解释；把最后那段空话删掉'
+        "
       />
-
-      <div class="ai-acts">
-        <button class="chip-btn" :class="{ on: showMat }" @click="showMat = !showMat">
-          {{ showMat ? '− 收起外部材料' : '＋ 外部材料' }}
-        </button>
-        <span v-if="material.trim()" class="ai-hint">已贴 {{ material.trim().length }} 字，AI 会用它补缺和纠错</span>
-      </div>
-
-      <template v-if="showMat">
-        <textarea
-          v-model="material"
-          class="ai-area ai-mat"
-          rows="6"
-          placeholder="把外面的正文整段粘进来：公众号文章、论文摘要、同事整理的文档、面经原文都行。AI 只取跟这篇相关的部分补进来，材料里跟笔记冲突的地方会写进 advice 让你判断。"
-        />
-        <p class="ai-hint">
-          只认粘贴的正文。贴网址抓不到 —— 浏览器跨域拿不到别人的页面，先把正文复制过来。
-          超长材料只取前 12000 字。
-        </p>
-      </template>
 
       <div class="ai-acts wrap">
         <button
@@ -242,22 +262,27 @@ const apply = () => {
       <div class="ai-acts">
         <button
           class="ai-primary"
-          :disabled="busy || !ready || !canRun"
+          :disabled="busy || !ready || !instruction.trim()"
           @click="run()"
         >
-          {{ busy ? '生成中…' : '✨ 生成改动' }}
+          {{ busy ? '生成中…' : rounds.length ? '继续调整' : '✨ 生成改动' }}
         </button>
         <AiSpin :active="!!busy" label="生成中" />
         <AiThink
           v-model="think"
           hint="整篇重排要判断哪块放错段、哪些重复，开思考通常更准；慢一些、费 token 多一点"
         />
+        <AiThink
+          v-model="outside"
+          label="库外知识"
+          hint="允 AI 用笔记之外的知识补空白：补进去的块会标「库外」，你在面板上逐条决定要不要"
+        />
       </div>
 
       <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
 
-      <template v-if="rows.length">
-        <div class="ai-hint ai-hint-bar">
+      <template v-if="canApply">
+        <div v-if="rows.length" class="ai-hint ai-hint-bar">
           <span>
             共 {{ rows.length }} 块 —— 挪 {{ counts.move }} / 改 {{ counts.replace }} / 新
             {{ counts.add }} / 删 {{ counts.drop }} / 留 {{ counts.keep }}，勾上的才写进去。
@@ -329,6 +354,7 @@ const apply = () => {
         </div>
 
         <template v-else>
+          <p v-if="!rows.length" class="ai-msg">这一轮没有改动。</p>
           <button v-if="counts.keep" class="df-more" @click="showKeep = !showKeep">
             <template v-if="showKeep">收起 {{ counts.keep }} 块没改动的</template>
             <template v-else>下面只列改动，展开还能看 {{ counts.keep }} 块没改动的</template>
@@ -349,6 +375,7 @@ const apply = () => {
                 <p v-if="r.op === 'move'" class="df-from">
                   {{ secName(r.oldSection) }} → {{ secName(r.section) }}
                 </p>
+                <p v-if="r.outside" class="df-out">库外知识 · 这篇里原来没有</p>
                 <BlockView v-if="r.op === 'keep' || r.op === 'drop'" :block="r.block" expand />
                 <template v-else-if="r.op === 'replace'">
                   <div v-if="r.old" class="df-old">
@@ -366,7 +393,8 @@ const apply = () => {
 
         <div class="ai-acts">
           <button class="ai-primary" @click="apply">写入笔记</button>
-          <button @click="rows = []">放弃</button>
+          <button :disabled="busy" @click="rows = []">放弃这轮</button>
+          <button v-if="rounds.length" :disabled="busy" @click="restart">重新开始</button>
         </div>
       </template>
     </div>

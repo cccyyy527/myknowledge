@@ -644,8 +644,6 @@ code { font-family: var(--mono); font-size: 0.9em; }
   resize: vertical;
 }
 .ai-area:focus { outline: none; border-color: var(--accent); background: #fff; }
-/* 外部材料：比指令框矮一档、字更小，视觉上让位给指令 */
-.ai-mat { margin-top: 8px; font-size: 12.5px; line-height: 1.65; background: #fbfaf8; }
 .ai-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .ai-acts.wrap { gap: 6px; }
 .ai-acts button {
@@ -679,6 +677,15 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .ai-ask button:disabled { opacity: 0.5; cursor: default; }
 .ai-msg.bad { color: #a33; }
 .ai-hint { font-size: 12px; line-height: 1.7; color: var(--ink-3); margin: 10px 0 0; }
+.ai-rounds {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  font-size: 11.5px; line-height: 1.6; color: var(--ink-3); margin: 10px 0 8px;
+}
+.ai-rounds .rnd {
+  padding: 2px 9px; border-radius: 999px; background: var(--accent-soft);
+  color: var(--accent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-rounds .ai-bulk-btn { margin-left: auto; }
 .ai-hint-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1015,6 +1022,12 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .df-move { border-color: #cfd9ec; background: #f6f9fd; }
 .df-move .df-tag { color: #3a5a8c; }
 .df-from { margin: 0 0 3px; font-size: 11px; letter-spacing: 0.02em; color: #3a5a8c; }
+/* 库外知识：模型自己补的、这篇文章原来没有的内容，勾之前得让人看见 */
+.df-out {
+  display: inline-block; margin: 0 0 4px; padding: 0 6px;
+  font-size: 10.5px; line-height: 1.7; letter-spacing: 0.02em;
+  color: #7a5a1e; background: #fbf1dd; border-radius: 4px;
+}
 .df-more {
   display: block; width: 100%; margin: 0 0 8px; padding: 4px 8px;
   font-size: 11.5px; color: var(--ink-3); text-align: left;

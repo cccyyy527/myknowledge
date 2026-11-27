@@ -94,6 +94,15 @@ function thinkingOf(c) {
   return { thinking: { type: c.thinking === 'on' ? 'enabled' : 'disabled' } }
 }
 
+// 思考过程（reasoning_content）也算在 max_tokens 里：开了思考还要原来的正文额度，
+// 就得另给思考留一份，否则它想完就没地方写正文了 —— 那正是「开了思考就不出内容」的原因。
+const THINK_EXTRA = 4096
+
+const thinkOn = (c) => c?.thinking === 'on' && /deepseek\.com/i.test(c.base || '')
+
+// 只在真开思考时加预算，关着的时候行为和以前完全一样
+const budgetOf = (maxTokens, cfg) => (thinkOn(cfg || loadAI()) ? maxTokens + THINK_EXTRA : maxTokens)
+
 // 所有请求都走这里：端点 / 鉴权 / 超时 / 取消只管一份，read 负责把 response 读成值
 async function request(cfg, body, { signal, timeoutMs, retry = 1 } = {}, read) {
   const c = cfg || loadAI()
@@ -183,9 +192,10 @@ function brief(v) {
 
 
 export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signal } = {}) {
+  const mt = budgetOf(maxTokens, cfg)
   return request(
     cfg,
-    { messages, temperature, max_tokens: maxTokens, stream: false },
+    { messages, temperature, max_tokens: mt, stream: false },
     { signal },
     async (res) => {
       const json = await res.json()
@@ -196,7 +206,7 @@ export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signa
           noContent({
             finish: choice?.finish_reason,
             reasoningChars: (choice?.message?.reasoning_content || '').length,
-            maxTokens,
+            maxTokens: mt,
             raw: brief(json?.error || json),
           }),
         )
@@ -215,9 +225,10 @@ export function chatStream(
   let finish = ''
   let reasoningChars = 0
   let sample = ''
+  const mt = budgetOf(maxTokens, cfg)
   return request(
     cfg,
-    { messages, temperature, max_tokens: maxTokens, stream: true },
+    { messages, temperature, max_tokens: mt, stream: true },
     { signal },
     async (res) => {
       await readSse(res, (j) => {
@@ -230,7 +241,7 @@ export function chatStream(
         full += delta
         onDelta && onDelta(delta, full)
       })
-      if (!full) throw new Error(noContent({ finish, reasoningChars, maxTokens, raw: sample }))
+      if (!full) throw new Error(noContent({ finish, reasoningChars, maxTokens: mt, raw: sample }))
       return full
     },
   )
@@ -272,7 +283,8 @@ export function chatStreamTools(
   messages,
   { cfg, tools, toolChoice, temperature = 0.2, maxTokens = 2000, onDelta, signal } = {},
 ) {
-  const body = { messages, temperature, max_tokens: maxTokens, stream: true }
+  const mt = budgetOf(maxTokens, cfg)
+  const body = { messages, temperature, max_tokens: mt, stream: true }
   if (tools?.length) {
     body.tools = tools
     body.tool_choice = toolChoice || 'auto'
@@ -280,7 +292,7 @@ export function chatStreamTools(
   const calls = []
   let full = ''
   let finish = ''
-  let reasoningChars = 0
+  let reasoning = ''
   let sample = ''
   return request(cfg, body, { signal }, async (res) => {
     await readSse(res, (j) => {
@@ -289,7 +301,7 @@ export function chatStreamTools(
       if (ch?.finish_reason) finish = ch.finish_reason
       const delta = ch?.delta
       if (!delta) return
-      if (delta.reasoning_content) reasoningChars += delta.reasoning_content.length
+      if (delta.reasoning_content) reasoning += delta.reasoning_content
       if (delta.content) {
         full += delta.content
         onDelta && onDelta(delta.content, full)
@@ -309,8 +321,8 @@ export function chatStreamTools(
       .map((x, i) => ({ ...x, id: x.id || `call_${Date.now().toString(36)}_${i}` }))
     // 一句话没给、工具也没调，这一轮就是空的：早点说清原因，别让 agent 白转到第 6 轮
     if (!full && !toolCalls.length)
-      throw new Error(noContent({ finish, reasoningChars, maxTokens, raw: sample }))
-    return { text: full, toolCalls }
+      throw new Error(noContent({ finish, reasoningChars: reasoning.length, maxTokens: mt, raw: sample }))
+    return { text: full, toolCalls, reasoning }
   }).catch((e) => {
     // 端点压根不认 tools / functions 时才值得退回预检索流程：只认 4xx 里明确提到 tools 的报错，
     // 别让「超时」「没返回内容」这种偶发错误把 agent 永久关掉

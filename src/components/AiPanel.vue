@@ -229,7 +229,8 @@ const saveExtra = () => {
         </label>
 
         <p class="ai-hint">
-          DeepSeek 默认会先长篇思考再回答，写笔记时又慢又贵，所以默认关掉；只有难题才值得勾上。
+          这是<strong>默认值</strong>：各面板里还能单独勾「深度思考」临时覆盖。开思考时会自动多留 4096
+          token 给思考过程，正文不会被挤空；代价是慢一些、贵一些，写笔记这类活通常用不上。
           常用组合：DeepSeek 用 <code>https://api.deepseek.com</code> + <code>deepseek-flash</code>（便宜，够用），
           要更强的推理换 <code>deepseek-v4-pro</code>（约贵 4 倍）；OpenAI 用
           <code>https://api.openai.com/v1</code> + <code>gpt-4o-mini</code>。地址结尾会自动补

@@ -18,6 +18,7 @@ import {
   stripMark,
 } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
+import AiThink from './AiThink.vue'
 import { searchNotes } from '../lib/retrieve.js'
 
 const props = defineProps({ open: Boolean })
@@ -27,6 +28,8 @@ const router = useRouter()
 const MAX = 6
 
 const cfg = ref(loadAI())
+// 深度思考只对这次面板有效：整合/查一致性都是「想清楚再答」受益的活
+const think = ref(false)
 const q = ref('')
 const ids = ref([])
 const extra = ref('')
@@ -39,6 +42,9 @@ const audit = ref(null) // 一致性结果
 
 const ready = computed(() => isAiReady(cfg.value))
 
+// 开关只覆盖这一次请求的 thinking，不动设置里的默认值
+const reqCfg = () => ({ ...cfg.value, thinking: think.value ? 'on' : 'off' })
+
 const say = (t, isBad = false) => {
   msg.value = t
   bad.value = isBad
@@ -49,6 +55,7 @@ watch(
   (v) => {
     if (!v) return
     cfg.value = loadAI()
+    think.value = cfg.value.thinking === 'on'
     q.value = ''
     ids.value = []
     extra.value = ''
@@ -123,7 +130,7 @@ const runMerge = async () => {
   audit.value = null
   say('')
   try {
-    const r = await mergeNotes({ ids: ids.value, instruction: extra.value, cfg: cfg.value })
+    const r = await mergeNotes({ ids: ids.value, instruction: extra.value, cfg: reqCfg() })
     merged.value = { ...r, title: r.title, topicId: r.topicId }
     off.value = []
     if (!r.blocks.length) say('模型没切出有效内容，换个组合再试', true)
@@ -142,7 +149,7 @@ const runAudit = async () => {
   audit.value = null
   say('')
   try {
-    const r = await auditNotes({ ids: ids.value, cfg: cfg.value })
+    const r = await auditNotes({ ids: ids.value, cfg: reqCfg() })
     audit.value = r
     if (!r.items.length) say('这几篇之间没查出对不上的地方')
   } catch (e) {
@@ -228,6 +235,10 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
       <button :disabled="!!busy || ids.length < 2" @click="runAudit">
         {{ busy === 'audit' ? '核对中…' : '查一致性（只读）' }}
       </button>
+      <AiThink
+        v-model="think"
+        hint="整合与一致性检查都属于想清楚再答的活，开一次试试；会慢一些、费 token 多一点"
+      />
     </div>
 
     <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>

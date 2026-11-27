@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { loadAI, isAiReady, reviseNote, applyOps, diagnose, SECTIONS } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
+import AiThink from './AiThink.vue'
 
 const props = defineProps({
   open: Boolean,
@@ -19,6 +20,8 @@ const PRESETS = [
 ]
 
 const cfg = ref(loadAI())
+// 整篇重排是最该开思考的场景：要判断哪块放错段、哪些重复，慢一点换准一点
+const think = ref(false)
 const instruction = ref('')
 const busy = ref(false)
 const msg = ref('')
@@ -38,6 +41,7 @@ watch(
   (v) => {
     if (!v) return
     cfg.value = loadAI()
+    think.value = cfg.value.thinking === 'on'
     rows.value = []
     titleHint.value = ''
     advice.value = ''
@@ -77,7 +81,11 @@ const run = async (preset) => {
   view.value = 'preview'
   say('')
   try {
-    const r = await reviseNote({ note: props.note, instruction: ins, cfg: cfg.value })
+    const r = await reviseNote({
+      note: props.note,
+      instruction: ins,
+      cfg: { ...cfg.value, thinking: think.value ? 'on' : 'off' },
+    })
     titleHint.value = r.title
     advice.value = r.advice || ''
     related.value = r.related || []
@@ -206,6 +214,10 @@ const apply = () => {
         >
           {{ busy ? '生成中…' : '✨ 生成改动' }}
         </button>
+        <AiThink
+          v-model="think"
+          hint="整篇重排要判断哪块放错段、哪些重复，开思考通常更准；慢一些、费 token 多一点"
+        />
       </div>
 
       <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>

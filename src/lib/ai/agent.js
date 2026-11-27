@@ -309,17 +309,20 @@ export async function agentRun({
     })
   let answer = ''
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const { text, toolCalls } = await call()
+    const { text, toolCalls, reasoning } = await call()
     if (!toolCalls.length) {
       answer = text
       msgs.push({ role: 'assistant', content: text })
       break
     }
-    msgs.push({
+    const am = {
       role: 'assistant',
       content: text || null,
       tool_calls: toolCalls.map((c) => ({ id: c.id, type: 'function', function: c.function })),
-    })
+    }
+    // DeepSeek 开思考时，带 tools 的下一轮必须原样回传 reasoning_content，否则 400
+    if (reasoning) am.reasoning_content = reasoning
+    msgs.push(am)
     for (const c of toolCalls) {
       const out = runTool(ctx, c)
       onTrace && onTrace(out.summary)

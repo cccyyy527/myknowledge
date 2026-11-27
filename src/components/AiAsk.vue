@@ -17,6 +17,7 @@ import {
   touchNote,
 } from '../lib/store.js'
 import AiSavePanel from './AiSavePanel.vue'
+import AiThink from './AiThink.vue'
 import { resolveLink } from '../lib/links.js'
 
 const emit = defineEmits(['close', 'setup'])
@@ -59,6 +60,10 @@ watch(strict, (v) => {
 
 const ready = computed(() => isAiReady(loadAI()))
 const stats = computed(() => libraryStats())
+
+// 深度思考：默认跟随设置，但这里可以临时改，只影响本次面板的请求
+const think = ref(loadAI().thinking === 'on')
+const reqCfg = () => ({ ...loadAI(), thinking: think.value ? 'on' : 'off' })
 
 // 技能只影响语气和回答套路，不影响检索；选中的存在 localStorage，下次进来还用它
 const skills = enabledSkills()
@@ -177,7 +182,7 @@ const ask = async (preset) => {
         const r = await askAgent({
           question: q,
           history,
-          cfg: loadAI(),
+          cfg: reqCfg(),
           strict: strict.value,
           skill: skill.value,
           signal: ctrl.signal,
@@ -215,7 +220,7 @@ const ask = async (preset) => {
       const r = await askLibrary({
         question: q,
         history,
-        cfg: loadAI(),
+        cfg: reqCfg(),
         strict: strict.value,
         skill: skill.value,
         signal: ctrl.signal,
@@ -383,7 +388,7 @@ const analyze = async (idx) => {
         const out = await archiveAgent({
           messages: t.messages,
           refs: t.used.map((x) => ({ id: x.id, title: x.title })),
-          cfg: loadAI(),
+          cfg: reqCfg(),
           onTrace: (line) => {
             if (saving.value !== s) return
             s.trace.push(line)
@@ -405,7 +410,7 @@ const analyze = async (idx) => {
         question: t.q,
         answer: stripMark(t.a),
         used: t.used,
-        cfg: loadAI(),
+        cfg: reqCfg(),
       })
     }
     if (saving.value !== s) return
@@ -491,6 +496,10 @@ const doSave = () => {
         <input type="checkbox" v-model="strict" />
         <span>只查我的笔记</span>
       </label>
+      <AiThink
+        v-model="think"
+        hint="让模型先想一段再答；查库、跨笔记比对这类活通常更准，慢一些、费 token 多一点"
+      />
     </div>
 
     <div v-if="skills.length > 1" class="ask-skills">

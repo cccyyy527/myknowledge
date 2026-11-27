@@ -32,9 +32,9 @@ const grow = (el) => {
 
 const vGrow = { mounted: grow, updated: grow }
 
-/* ---------- 打 [[ 时弹出笔记标题候选 ----------
-   插进去的是纯文本 [[标题]]，引用关系由渲染那层按标题现算，
-   所以这里只管把标题写对，不用管 id。 */
+/* ---------- 打 [[ 时弹出笔记候选 ----------
+   插进去的是 [[id]]，而不是标题：链接认 id，所以改名 / 换分类都不断。
+   标题对不上任何一篇时（想新建），仍然写 [[标题]]，由渲染层标成「未创建」。 */
 const wiki = ref(null)
 const closeWiki = () => {
   wiki.value = null
@@ -47,7 +47,9 @@ const syncWiki = (el) => {
   if (open < 0) return closeWiki()
   const seg = upto.slice(open + 2)
   if (/[\[\]\n]/.test(seg)) return closeWiki()
-  const q = normTitle(seg)
+  // 光标落在 [[id|别名 里时，只拿别名部分去匹配
+  const bar = seg.lastIndexOf('|')
+  const q = normTitle(bar >= 0 ? seg.slice(bar + 1) : seg)
   const seen = new Set()
   const list = []
   for (const n of liveNotes()) {
@@ -55,10 +57,11 @@ const syncWiki = (el) => {
     const k = normTitle(t)
     if (!k || seen.has(k) || (q && !k.includes(q))) continue
     seen.add(k)
-    list.push(t)
+    list.push(n)
   }
-  const items = list.slice(0, 8).map((t) => ({ title: t, fresh: false }))
-  if (q && !list.some((t) => normTitle(t) === q)) items.unshift({ title: seg.trim(), fresh: true })
+  const items = list.slice(0, 8).map((n) => ({ id: n.id, title: n.title, fresh: false }))
+  const typed = (bar >= 0 ? seg.slice(bar + 1) : seg).trim()
+  if (q && !list.some((n) => normTitle(n.title) === q)) items.unshift({ id: '', title: typed, fresh: true })
   if (!items.length) return closeWiki()
   const r = el.getBoundingClientRect()
   wiki.value = {
@@ -67,6 +70,7 @@ const syncWiki = (el) => {
     el,
     start: open,
     caret,
+    alias: bar >= 0 ? typed : '',
     x: r.left,
     y: r.bottom + 4,
     w: Math.max(180, Math.min(r.width || 240, 320)),
@@ -78,13 +82,15 @@ const onWikiInput = (e) => {
   if (tag === 'TEXTAREA' || tag === 'INPUT') syncWiki(e.target)
 }
 
-const pickWiki = (title) => {
+const pickWiki = (it) => {
   const s = wiki.value
-  if (!s) return
+  if (!s || !it) return
   const el = s.el
   el.focus()
   el.setSelectionRange(s.start, s.caret)
-  el.setRangeText(`[[${title}]]`, s.start, s.caret, 'end')
+  // 有 id 就写 id；顺手打了别名（[[xx|别名）就一起保住
+  const text = it.id ? (s.alias ? `[[${it.id}|${s.alias}]]` : `[[${it.id}]]`) : `[[${it.title}]]`
+  el.setRangeText(text, s.start, s.caret, 'end')
   el.dispatchEvent(new Event('input'))
   closeWiki()
 }
@@ -100,7 +106,7 @@ const onWikiKey = (e) => {
     wiki.value.sel = (wiki.value.sel - 1 + n) % n
   } else if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault()
-    pickWiki(wiki.value.items[wiki.value.sel].title)
+    pickWiki(wiki.value.items[wiki.value.sel])
   } else if (e.key === 'Escape') {
     e.preventDefault()
     closeWiki()
@@ -328,7 +334,7 @@ const LABELS = {
           :key="it.title + i"
           class="wiki-opt"
           :class="{ on: i === wiki.sel, fresh: it.fresh }"
-          @mousedown.prevent="pickWiki(it.title)"
+          @mousedown.prevent="pickWiki(it)"
           @mouseenter="wiki.sel = i"
         >
           <span class="wiki-opt-t">{{ it.title }}</span>

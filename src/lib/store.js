@@ -1,5 +1,6 @@
 import { reactive, watch } from 'vue'
 import { DOMAINS, TOPICS, DEMO_NOTE } from './seed.js'
+import { idifyAll, idifyText, inboundCount, LINK_FIELDS, refsToNote, relinkText, titleIndex } from './links.js'
 
 // 原型阶段：全部数据放 localStorage，刷新不丢；清浏览器数据会丢
 const KEY = 'myknowledge.v3'
@@ -329,8 +330,15 @@ function templateBlocks() {
 export const newBlockId = () => 'b-' + Math.random().toString(36).slice(2, 10)
 
 // 把若干块塞到某个段落末尾；没有这一段就在文末新起一段
+// AI / 模板写进来的块里带的还是 [[标题]]，落库前先换成 [[id]]，省得以后改名断链
 export function insertBlocks(note, sectionTitle, blocks) {
   if (!note || !blocks || !blocks.length) return
+  const byTitle = titleIndex(liveNotes())
+  for (const b of blocks) {
+    for (const f of LINK_FIELDS[b.type] || []) {
+      if (b[f]) b[f] = idifyText(b[f], byTitle)
+    }
+  }
   const arr = note.blocks
   const hit = arr.findIndex(
     (b) => b.type === 'heading' && b.level === 2 && b.text === sectionTitle,
@@ -353,6 +361,50 @@ export function insertBlocks(note, sectionTitle, blocks) {
 export function touchNote(note) {
   // 只动 updatedAt：version 既不展示也不参与云端指纹，不再自增
   note.updatedAt = new Date().toISOString()
+}
+
+/* ---------- 改名 ---------- 
+   正文里的链接默认写 [[id]]，改名本来就不影响；
+   这里额外处理「还按标题引用的老链接」，让它们一起跟过来，别静默断掉。 */
+
+// 这次改名会牵动多少篇（只数还按标题引用旧标题的）
+export const renameImpact = (id, nextTitle) => {
+  const n = noteById(id)
+  if (!n || !String(nextTitle || '').trim()) return 0
+  return inboundCount(n.title, liveNotes())
+}
+
+// 改标题：顺手把指向旧标题的 [[ ]] 换成 [[id]]。返回被牵连的笔记数
+export function renameNote(id, nextTitle) {
+  const n = noteById(id)
+  if (!n) return { ok: false, refs: 0 }
+  const next = String(nextTitle || '').trim()
+  if (!next || next === n.title) return { ok: false, refs: 0 }
+  const old = n.title
+  const hits = refsToNote(liveNotes(), id, old)
+  for (const { note, block } of hits) {
+    for (const f of Object.keys(block)) {
+      if (typeof block[f] !== 'string' || !block[f].includes('[[')) continue
+      block[f] = relinkText(block[f], id, old)
+    }
+    touchNote(note)
+  }
+  n.title = next
+  touchNote(n)
+  return { ok: true, refs: hits.length }
+}
+
+/* ---------- 一次性迁移：[[标题]] → [[id]] ---------- 
+   老内容里的链接是标题字面量。趁现在目标唯一，全部换成 id，
+   以后改名 / 换分类就不会断。对不上任何一篇的（占位链接）原样保留。 */
+const LINK_MIG_KEY = 'myknowledge.links.idified'
+
+export function idifyLinks(force = false) {
+  if (!force && localStorage.getItem(LINK_MIG_KEY) === '1') return 0
+  const touched = idifyAll(liveNotes())
+  for (const { note } of touched) touchNote(note)
+  localStorage.setItem(LINK_MIG_KEY, '1')
+  return touched.length
 }
 
 // 软删除：进回收站，能捞回来；要真删得走 purgeNote

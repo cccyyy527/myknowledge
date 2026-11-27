@@ -9,6 +9,7 @@ import {
   touchNote,
   removeNote,
   moveNote,
+  renameNote,
   liveNotes,
   newBlockId,
   noteBadges,
@@ -17,7 +18,7 @@ import {
   flattenTopics,
   state,
 } from '../lib/store.js'
-import { backlinksTo } from '../lib/links.js'
+import { backlinksTo, brokenLinks } from '../lib/links.js'
 import BlockView from '../components/BlockView.vue'
 import BlockEdit from '../components/BlockEdit.vue'
 import AiBlockDialog from '../components/AiBlockDialog.vue'
@@ -459,6 +460,40 @@ const makeNote = (title) => {
 }
 
 const backlinks = computed(() => backlinksTo(note.value?.id, liveNotes()))
+
+/* ---------- 改标题 ----------
+   输入框不直接绑 note.title：中间留一层草稿，提交时才落地，
+   这样能在同一个动作里把指向旧标题的老链接一起换成 id 链接，不再静默断链。 */
+const titleDraft = ref('')
+watch(
+  () => note.value?.title,
+  (t) => {
+    titleDraft.value = t || ''
+  },
+  { immediate: true },
+)
+
+const commitTitle = () => {
+  const n = note.value
+  if (!n) return
+  const next = String(titleDraft.value || '').trim()
+  if (!next || next === n.title) {
+    titleDraft.value = n.title
+    return
+  }
+  const r = renameNote(n.id, next)
+  savedAt.value = r.refs ? `已改名，${r.refs} 处旧链接一起跟过来了` : '已改名'
+}
+
+// 这篇自己正文里指向不存在目标的 [[ ]]，给个提示而不是悄悄变灰
+const brokenHere = computed(() => {
+  const id = note.value?.id
+  if (!id) return []
+  return brokenLinks(liveNotes())
+    .filter((b) => b.note.id === id)
+    .map((b) => b.link)
+})
+
 </script>
 
 <template>
@@ -476,7 +511,14 @@ const backlinks = computed(() => backlinksTo(note.value?.id, liveNotes()))
     </nav>
 
     <div class="note-head">
-      <input v-if="mode === 'edit'" v-model="note.title" class="note-title-inp" />
+      <input
+        v-if="mode === 'edit'"
+        v-model="titleDraft"
+        class="note-title-inp"
+        title="改完按 Enter 或点别处生效，指向这篇的老链接会一起跟过来"
+        @blur="commitTitle"
+        @keyup.enter="$event.target.blur()"
+      />
       <h1 v-else class="page-title">{{ note.title }}</h1>
       <div class="note-tools">
         <div class="tabs">
@@ -514,6 +556,9 @@ const backlinks = computed(() => backlinksTo(note.value?.id, liveNotes()))
       <span v-if="noteBadges(note).qa" class="chip">问答 {{ noteBadges(note).qa }}</span>
       <span v-if="noteBadges(note).pitfalls" class="chip">坑 {{ noteBadges(note).pitfalls }}</span>
       <span v-if="noteBadges(note).todos" class="chip warn">待补 {{ noteBadges(note).todos }}</span>
+      <span v-if="brokenHere.length" class="chip warn" :title="brokenHere.map((l) => l.target).join('、')">
+        {{ brokenHere.length }} 个链接指不到东西
+      </span>
     </p>
 
     <div v-if="mode !== 'edit' && readTags.length" class="tag-read">

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import katex from 'katex'
 import { liveNotes } from '../lib/store.js'
-import { isWholeCard, resolveTitle } from '../lib/links.js'
+import { canCreate, isWholeCard, linkLabel, resolveLink } from '../lib/links.js'
 
 const props = defineProps({
   block: { type: Object, required: true },
@@ -37,13 +37,23 @@ const esc = (s) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 
-// [[另一篇的标题]] → 可点的 chip；标题对不上库里任何一篇时标成「未创建」
-const chipHtml = (title, card) => {
-  const hit = resolveTitle(title, liveNotes())
+// [[笔记]] / [[笔记|显示文字]] → 可点的 chip。目标是 id 就按 id 认，改名也跟得上；
+// 认不到目标时标成「未创建」，点一下照着这个名字建
+const chipHtml = (link, card) => {
+  const hit = resolveLink(link, liveNotes())
+  const label = linkLabel(link, hit)
   const cls = ['note-link', card ? 'note-link-card' : '', hit ? '' : 'missing'].filter(Boolean).join(' ')
-  const attr = hit ? `data-note="${esc(hit.id)}"` : `data-make="${esc(title)}"`
-  const tip = hit ? `跳到《${hit.title}》` : `还没有《${title}》，点一下新建`
-  return `<button class="${cls}" ${attr} title="${esc(tip)}">${esc(hit ? hit.title : title)}</button>`
+  const attr = hit
+    ? `data-note="${esc(hit.id)}"`
+    : canCreate(link)
+      ? `data-make="${esc(label)}"`
+      : 'disabled'
+  const tip = hit
+    ? `跳到《${hit.title}》`
+    : canCreate(link)
+      ? `还没有《${label}》，点一下新建`
+      : `链接指向的笔记已经删掉了`
+  return `<button class="${cls}" ${attr} title="${esc(tip)}">${esc(label)}</button>`
 }
 
 // 一段文字 → HTML：先转义，再处理 [[ ]] 和 [n]，顺序不能反（[[3]] 会被 [n] 规则先吃掉）
@@ -51,7 +61,14 @@ const htmlOf = (text) => {
   const raw = String(text || '')
   if (!raw) return ''
   const card = isWholeCard(raw)
-  let s = esc(raw).replace(/\[\[([^\[\]\n]{1,80})\]\]/g, (_m, t) => chipHtml(t.trim(), card))
+  let s = esc(raw).replace(/\[\[([^\[\]\n]+?)\]\]/g, (_m, body) => {
+    const cut = body.indexOf('|')
+    const link =
+      cut < 0
+        ? { target: body.trim(), display: '' }
+        : { target: body.slice(0, cut).trim(), display: body.slice(cut + 1).trim() }
+    return chipHtml(link, card)
+  })
   const refs = props.block.refs
   if (refs && refs.length) {
     s = s.replace(/\[(\d+)\]/g, (m, d) => {

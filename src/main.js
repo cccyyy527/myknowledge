@@ -9,6 +9,7 @@ import AggregatePage from './pages/AggregatePage.vue'
 import SearchPage from './pages/SearchPage.vue'
 import OrphanPage from './pages/OrphanPage.vue'
 import TrashPage from './pages/TrashPage.vue'
+import { idifyLinks } from './lib/store.js'
 import 'katex/dist/katex.min.css'
 import './styles.css'
 
@@ -26,5 +27,8 @@ const router = createRouter({
   ],
   scrollBehavior: () => ({ top: 0 }),
 })
+
+// 老内容里的 [[标题]] 换成一劳永逸的 [[id]]（只跑一次，之后靠 localStorage 标记跳过）
+idifyLinks()
 
 createApp(App).use(router).mount('#app')

@@ -875,6 +875,9 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .ask-edit { padding: 8px 10px; border-top: 1px dashed var(--line); }
 .ask-edit:first-child { border-top: 0; }
 .ask-edit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+.ask-edit-pick { display: inline-flex; align-items: center; gap: 5px; flex: none; cursor: pointer; }
+.ask-edit-pick input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.ask-edit.off { opacity: 0.42; }
 .ask-edit-op {
   flex: none; font-size: 10.5px; line-height: 1.5; padding: 0 6px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent); font-weight: 600;

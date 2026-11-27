@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, stripMark, SECTIONS, enabledSkills, loadSkillPref, saveSkillPref } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, applyChanges, stripMark, SECTIONS, enabledSkills, loadSkillPref, saveSkillPref } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
 import { attachRefs, cleanBlocks, plainBlocks } from '../lib/draft.js'
 import {
@@ -324,6 +324,7 @@ const applyProposal = (s, r) => {
     s.noteId = r.noteId
     s.blocks = null
     s.edits = r.edits || []
+    s.offEdits = []
     s.plan = r.blocks || []
     s.skipped = r.skipped || []
     return
@@ -332,6 +333,7 @@ const applyProposal = (s, r) => {
   s.mode = r.target
   s.section = r.section
   s.edits = []
+  s.offEdits = []
   s.plan = null
   s.skipped = []
   if (r.target === 'exist') s.noteId = r.noteId
@@ -355,6 +357,7 @@ const blankSaving = (t) => {
     moveTo: '',
     blocks: null,
     edits: [],
+    offEdits: [],
     plan: null,
     skipped: [],
     reason: '',
@@ -435,8 +438,9 @@ const doSave = () => {
 
   if (s.mode === 'edit') {
     const note = liveNoteById(s.noteId)
-    if (!note || !s.plan?.length) return
-    note.blocks = s.plan
+    const picked = (s.edits || []).filter((_, i) => !(s.offEdits || []).includes(i))
+    if (!note || !picked.length) return
+    note.blocks = applyChanges(note, picked)
     touchNote(note)
     saving.value = null
     emit('close')

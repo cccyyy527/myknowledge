@@ -42,6 +42,17 @@ const editPlan = computed(() => {
 
 const OP_TEXT = { replace: '改写', remove: '删除', insert: '就地插入' }
 
+// 逐条勾选：默认全选，勾掉的这次不会写进笔记
+const kept = (i) => !(props.saving.offEdits || []).includes(i)
+const toggle = (i) => {
+  const s = props.saving
+  const off = s.offEdits || (s.offEdits = [])
+  const at = off.indexOf(i)
+  if (at >= 0) off.splice(at, 1)
+  else off.push(i)
+}
+const keptCount = computed(() => editPlan.value.filter((e, i) => kept(i)).length)
+
 const noteOptions = computed(() =>
   liveNotes().map((n) => ({
     id: n.id,
@@ -98,14 +109,19 @@ const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
 
     <template v-if="saving.mode === 'edit'">
       <p class="ask-save-path">
-        改《{{ editingNote?.title || '这篇' }}》{{ editPlan.length }} 处<span v-if="saving.skipped?.length">
+        改《{{ editingNote?.title || '这篇' }}》{{ editPlan.length }} 处，这次应用 {{ keptCount }} 处<span
+          v-if="saving.skipped?.length"
+        >
           ，另有 {{ saving.skipped.length }} 处对不上被丢掉</span
         >
       </p>
       <div class="ask-edits">
-        <div v-for="e in editPlan" :key="e.key" class="ask-edit">
+        <div v-for="(e, i) in editPlan" :key="e.key" class="ask-edit" :class="{ off: !kept(i) }">
           <div class="ask-edit-head">
-            <span class="ask-edit-op" :class="e.op">{{ OP_TEXT[e.op] || e.op }}</span>
+            <label class="ask-edit-pick">
+              <input type="checkbox" :checked="kept(i)" @change="toggle(i)" />
+              <span class="ask-edit-op" :class="e.op">{{ OP_TEXT[e.op] || e.op }}</span>
+            </label>
             <span v-if="e.afterTitle" class="ask-edit-at">插在「{{ e.afterTitle }}」后面</span>
             <span v-if="e.why" class="ask-edit-why">{{ e.why }}</span>
           </div>
@@ -185,10 +201,16 @@ const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
     <div class="ai-acts">
       <button
         class="ai-primary"
-        :disabled="saving.analyzing || (saving.mode === 'edit' && !editPlan.length)"
+        :disabled="saving.analyzing || (saving.mode === 'edit' && !keptCount)"
         @click="emit('save')"
       >
-        {{ saving.mode === 'edit' ? '应用改动' : saving.mode === 'exist' ? '写进这篇' : '写入新笔记' }}
+        {{
+          saving.mode === 'edit'
+            ? `应用改动${keptCount ? `（${keptCount} 处）` : ''}`
+            : saving.mode === 'exist'
+              ? '写进这篇'
+              : '写入新笔记'
+        }}
       </button>
       <button @click="emit('close')">取消</button>
     </div>

@@ -65,6 +65,24 @@ export function planEdits(note, edits) {
   return { blocks, changed, skipped }
 }
 
+// 只应用用户勾中的那几条改动：从原笔记重算，勾掉的块原样留着
+export function applyChanges(note, changes) {
+  const blocks = (note.blocks || []).map((b) => ({ ...b }))
+  for (const c of changes || []) {
+    if (c.op === 'remove') {
+      const at = blocks.findIndex((b) => b.id === c.blockId)
+      if (at >= 0) blocks.splice(at, 1)
+    } else if (c.op === 'insert') {
+      const at = blocks.findIndex((b) => b.id === c.afterBlockId)
+      if (at >= 0) blocks.splice(at + 1, 0, { ...c.after })
+    } else {
+      const at = blocks.findIndex((b) => b.id === c.blockId)
+      if (at >= 0) blocks[at] = { ...c.after }
+    }
+  }
+  return blocks
+}
+
 /* ---------- L1：改一个块 ---------- */
 
 export const AI_ACTIONS = [

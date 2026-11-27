@@ -3,16 +3,16 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, stripMark, SECTIONS } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
+import { attachRefs, cleanBlocks, plainBlocks } from '../lib/draft.js'
 import {
   state,
   createNote,
   newBlockId,
   flattenTopics,
-  topicPath,
   insertBlocks,
   touchNote,
 } from '../lib/store.js'
-import BlockView from './BlockView.vue'
+import AiSavePanel from './AiSavePanel.vue'
 import { normTitle } from '../lib/links.js'
 
 const emit = defineEmits(['close', 'setup'])
@@ -289,101 +289,10 @@ const splitOutside = (text) => {
 
 const saving = ref(null) // { idx, mode, topicId, noteId, section, outside, title, blocks, reason, analyzing, err }
 
-const groups = computed(() =>
-  state.domains.map((d) => ({ domain: d, rows: flattenTopics(d.id, true) })),
-)
-
-// 写进已有笔记时按标题选，顺序和笔记里的段落一致
+// 面板里改的是哪一条回答
 const savingTurn = computed(() => (saving.value ? turns.value[saving.value.idx] : null))
 
-// 拿块的首句当标签，用来告诉用户「插在哪块后面」
-function labelOf(noteId, blockId) {
-  const note = state.notes.find((n) => n.id === noteId)
-  const b = note?.blocks?.find((x) => x.id === blockId)
-  if (!b) return ''
-  const raw = b.text || b.term || b.question || b.items?.[0] || b.latex || ''
-  const t = stripMark(String(raw)).replace(/\s+/g, ' ').trim()
-  return t.length > 18 ? t.slice(0, 18) + '…' : t
-}
-
-// 改已有块时按条目渲染「旧 → 新」对照
-const editPlan = computed(() => {
-  const s = saving.value
-  if (!s || s.mode !== 'edit' || !s.edits?.length) return []
-  return s.edits.map((e, i) => ({
-    key: `ed${i}`,
-    op: e.op,
-    why: e.why,
-    before: e.before,
-    after: e.after,
-    afterTitle: e.op === 'insert' ? labelOf(s.noteId, e.afterBlockId) : '',
-  }))
-})
-
-const OP_TEXT = { replace: '改写', remove: '删除', insert: '就地插入' }
-
-// 只列有笔记的分类，空的太多了没法选
-const noteOptions = computed(() =>
-  state.notes.map((n) => ({
-    id: n.id,
-    title: n.title,
-    path: topicPath(n.topicId).map((t) => t.name).join(' / '),
-  })),
-)
-
-// 改已有块时预览头里要显示改的是哪一篇
-const editingNote = computed(() =>
-  saving.value ? state.notes.find((n) => n.id === saving.value.noteId) : null,
-)
-
 const blankTitle = (q) => (q.length > 38 ? q.slice(0, 38) + '…' : q)
-
-// AI 没判断出来时的兜底：整条回答就是一张问答卡
-const plainBlocks = computed(() => {
-  const t = savingTurn.value
-  if (!t) return []
-  const inside = stripMark(t.a)
-  const src = t.used.length
-    ? '\n\n来源：' + t.used.map((s, i) => `[${i + 1}] ${s.title}`).join('　')
-    : ''
-  const refs = t.used.map((s) => ({ id: s.id, title: s.title }))
-  return [{ id: 'pv-qa', type: 'qa', question: t.q, answer: (inside || '（空）') + src, refs }]
-})
-
-// [n] 落到哪个块上，就把 refs 记在那个块里，渲染时才能点
-const REF_RE = /\[\d+\]/
-const attachRefs = (blocks, refs) => {
-  if (!refs.length) return blocks
-  const fields = ['text', 'detail', 'answer', 'cause', 'avoid', 'term']
-  return blocks.map((b) => {
-    const hit =
-      fields.some((k) => REF_RE.test(b[k] || '')) || (b.items || []).some((s) => REF_RE.test(s))
-    return hit ? { ...b, refs } : b
-  })
-}
-
-// 预览：有 AI 分块就按段落排，没有就退回一张问答卡
-const savingBlocks = computed(() => {
-  const s = saving.value
-  if (!s) return []
-  const refs = (savingTurn.value?.used || []).map((x) => ({ id: x.id, title: x.title }))
-  return s.blocks?.length ? groupBySection(attachRefs(s.blocks, refs)) : plainBlocks.value
-})
-
-// 预览里的引用 chip：开新标签看原文，别把面板连同草稿一起关掉
-const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
-
-// 只给真有内容的段落加标题，预览里不出现空小节
-function groupBySection(blocks) {
-  const out = []
-  for (const sec of SECTIONS) {
-    const items = blocks.filter((b) => (b.section || 'core') === sec.id)
-    if (!items.length) continue
-    out.push({ id: 'pv-h-' + sec.id, type: 'heading', level: 2, text: sec.title })
-    out.push(...items)
-  }
-  return out
-}
 
 // 提案落到面板字段上：agent 自己提交的提案、和「存成笔记」让 AI 判断，都走这里
 const applyProposal = (s, r) => {
@@ -498,17 +407,9 @@ const doSave = () => {
 
   const refs = t.used.map((x) => ({ id: x.id, title: x.title }))
   const ai = s.blocks?.length ? attachRefs(s.blocks, refs) : null
-  const body = ai || plainBlocks.value
+  const body = ai || plainBlocks(t)
 
-  const clean = (list) =>
-    list.map((b) => {
-      const { id, ...rest } = b
-      for (const k of Object.keys(rest)) {
-        if (typeof rest[k] === 'string') rest[k] = stripMark(rest[k])
-        else if (Array.isArray(rest[k])) rest[k] = rest[k].map((x) => (typeof x === 'string' ? stripMark(x) : x))
-      }
-      return { id: newBlockId(), ...rest }
-    })
+  const clean = (list) => cleanBlocks(list, newBlockId)
 
   if (s.mode === 'edit') {
     const note = state.notes.find((n) => n.id === s.noteId)
@@ -550,7 +451,6 @@ const doSave = () => {
   router.push(`/n/${note.id}`)
 }
 
-const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
 </script>
 
 <template>
@@ -600,133 +500,14 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
                 ＋ 存成笔记
               </button>
 
-              <div v-else class="ask-save-box">
-                <div class="ask-save-head">
-                  <span>存成笔记</span>
-                  <button class="ask-save-x" title="取消" @click="saving = null">×</button>
-                </div>
-
-                <p v-if="saving.analyzing" class="ask-save-why">✨ AI 正在判断该新建还是追加、内容怎么分块…</p>
-                <div v-if="saving.trace && saving.trace.length" class="ask-trace ask-trace-save">
-                  <span v-for="(g, k) in saving.trace" :key="k" class="ask-trace-i">{{ g }}</span>
-                </div>
-                <template v-else-if="saving.reason || saving.err">
-                  <p v-if="saving.err" class="ai-msg bad">{{ saving.err }}</p>
-                  <p v-else class="ask-save-why">✨ {{ saving.reason }}</p>
-                  <button class="ask-save-retry" @click="analyze(saving.idx)">↻ 让 AI 重新判断</button>
-                </template>
-
-                <div class="ask-save-mode">
-                  <button :class="{ on: saving.mode === 'new' }" @click="saving.mode = 'new'">
-                    新建一篇
-                  </button>
-                  <button
-                    :class="{ on: saving.mode === 'exist' }"
-                    :disabled="!noteOptions.length"
-                    @click="saving.mode = 'exist'"
-                  >
-                    写进已有笔记
-                  </button>
-                  <button
-                    v-if="saving.plan"
-                    :class="{ on: saving.mode === 'edit' }"
-                    @click="saving.mode = 'edit'"
-                  >
-                    改已有内容
-                  </button>
-                </div>
-
-                <template v-if="saving.mode === 'edit'">
-                  <p class="ask-save-path">
-                    改《{{ editingNote?.title || '这篇' }}》{{ editPlan.length }} 处<span
-                      v-if="saving.skipped?.length"
-                    >
-                      ，另有 {{ saving.skipped.length }} 处对不上被丢掉</span
-                    >
-                  </p>
-                  <div class="ask-edits">
-                    <div v-for="e in editPlan" :key="e.key" class="ask-edit">
-                      <div class="ask-edit-head">
-                        <span class="ask-edit-op" :class="e.op">{{ OP_TEXT[e.op] || e.op }}</span>
-                        <span v-if="e.afterTitle" class="ask-edit-at">插在「{{ e.afterTitle }}」后面</span>
-                        <span v-if="e.why" class="ask-edit-why">{{ e.why }}</span>
-                      </div>
-                      <div v-if="e.before" class="ask-edit-before" :class="{ gone: e.op === 'remove' }">
-                        <BlockView :block="e.before" expand />
-                      </div>
-                      <div v-if="e.after" class="ask-edit-after">
-                        <BlockView :block="e.after" expand @open-note="openCite" />
-                      </div>
-                    </div>
-                  </div>
-                </template>
-
-                <template v-if="saving.mode === 'new'">
-                  <label class="ai-pick">
-                    <span>标题</span>
-                    <input
-                      v-model.trim="saving.title"
-                      class="ask-save-title"
-                      placeholder="这篇笔记叫什么"
-                      @input="saving.touchedTitle = true"
-                    />
-                  </label>
-                  <label class="ai-pick">
-                    <span>落到</span>
-                    <select v-model="saving.topicId">
-                      <optgroup v-for="g in groups" :key="g.domain.id" :label="g.domain.name">
-                        <option v-for="r in g.rows" :key="r.topic.id" :value="r.topic.id">
-                          {{ '　'.repeat(r.depth) }}{{ r.topic.name }}
-                        </option>
-                      </optgroup>
-                    </select>
-                  </label>
-                  <p class="ask-save-path">{{ pathOf(saving.topicId) }}</p>
-                </template>
-
-                <template v-else-if="saving.mode === 'exist'">
-                  <label class="ai-pick">
-                    <span>写进</span>
-                    <select v-model="saving.noteId">
-                      <option v-for="o in noteOptions" :key="o.id" :value="o.id">
-                        {{ o.title }}（{{ o.path }}）
-                      </option>
-                    </select>
-                  </label>
-                  <template v-if="!saving.blocks?.length">
-                    <label class="ai-pick">
-                      <span>加到这段</span>
-                      <select v-model="saving.section">
-                        <option v-for="s in SECTIONS" :key="s.id" :value="s.id">{{ s.title }}</option>
-                      </select>
-                    </label>
-                    <p class="ask-save-path">
-                      会拼到「{{ (SECTIONS.find((s) => s.id === saving.section) || SECTIONS[0]).title }}」这一段末尾
-                    </p>
-                  </template>
-                  <p v-else class="ask-save-path">每块按内容自己找段落，插到对应小节末尾</p>
-                </template>
-
-                <div v-if="saving.mode !== 'edit'" class="ai-preview ask-save-pv">
-                  <BlockView
-                    v-for="b in savingBlocks"
-                    :key="b.id"
-                    :block="b"
-                    expand
-                    @open-note="openCite"
-                  />
-                </div>
-                <div class="ai-acts">
-                  <button
-                    class="ai-primary"
-                    :disabled="saving.analyzing || (saving.mode === 'edit' && !editPlan.length)"
-                    @click="doSave"
-                  >
-                    {{ saving.mode === 'edit' ? '应用改动' : saving.mode === 'exist' ? '写进这篇' : '写入新笔记' }}
-                  </button>
-                  <button @click="saving = null">取消</button>
-                </div>
-              </div>
+              <AiSavePanel
+                v-else
+                :saving="saving"
+                :turn="t"
+                @close="saving = null"
+                @retry="analyze(saving.idx)"
+                @save="doSave"
+              />
             </template>
           </template>
         </div>

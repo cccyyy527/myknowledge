@@ -3,7 +3,7 @@
 import { liveNoteById } from '../store.js'
 import { searchNotes, noteText, noteIsEmpty, noteBrief } from '../retrieve.js'
 import { loadAI, isAiReady, thinkOn, chatStreamTools } from './client.js'
-import { SECTIONS, str, normalizeBlocks, stripMark, OUTSIDE_MARK } from './schema.js'
+import { SECTIONS, SECTION_SPEC, str, normalizeBlocks, stripMark, OUTSIDE_MARK, sectionDumpIssue } from './schema.js'
 import { planEdits } from './block-edit.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { FILE_RULE } from './compose.js'
@@ -38,7 +38,12 @@ const BLOCK_SCHEMA = {
         'todo',
       ],
     },
-    section: { type: 'string', enum: SECTION_IDS },
+    section: {
+      type: 'string',
+      enum: SECTION_IDS,
+      description:
+        '这块归到哪一节（按内容语义，不按内容来源）：core 核心结论＝只放能追问「凭什么」的断言；detail 推导/细节＝公式、前提、无偏性、与替代方案的对比；qa 高频问法＝只有「面试官原话 + 我怎么答」的问答卡才放这里；pitfall 我踩过的坑＝真答错过做错过的事 + 怎么改；todo 还没查清的占位。',
+    },
     text: { type: 'string' },
     term: { type: 'string' },
     detail: { type: 'string' },
@@ -275,6 +280,12 @@ function runTool(ctx, call) {
         summary: '🗂 提案无效（blocks 为空）',
       }
     }
+    // 段落归位是硬要求：整条答案都标 qa 等于把断言、推导全降级成问答卡，
+    // 那篇笔记的「核心结论」会一直是空的
+    const dump = sectionDumpIssue(blocks)
+    if (dump) {
+      return { content: `${dump}\n重新调用 save_note，块内容可以照搬，只把 section 改对。`, summary: '🗂 打回：全塞进高频问法' }
+    }
     const oldNote = liveNoteById(str(args.noteId))
     const mode = args.mode === 'exist' && oldNote ? 'exist' : 'new'
     const nearId = str(args.nearNoteId)
@@ -446,6 +457,8 @@ ${FILE_RULE}
 - 这轮回答如果是在纠正、补充、更新已有块里的说法，用 mode=edit：edits 里逐条写 op（replace 整块改写 / remove 删除 / insert 在目标块后就地插一块），blockId 取自 read_note 的 [#块id]，块内容要给全。
 - 纯粹是新内容才用 mode=exist 往小节末尾追加 blocks。
 - blocks 要按语义分块（paragraph / definition / formula / qa / pitfall / steps / comparison），别把整篇答案塞进一张问答卡。
+- 每块都带 section，按内容语义定，跟这次内容是从一个问答来的无关 —— 别因为用户「问了个问题」就把整条答案都标成 qa。只有真写成「面试官会这么问 + 我怎么答」的卡才放 qa；一句能站住的结论进 core，公式 / 前提 / 推导 / 对比进 detail。
+${SECTION_SPEC}
 - 回答里的 [1] [2] 这些编号原样保留。
 - 上面这轮回答整篇收进来：按内容顺成一条，不要标注哪句是引用、哪句是你自己补的，也不要留任何方括号标签或前缀。
 - 笔记里没有、但确实成立的通用知识可以写进来，写清楚成立条件和结论就行。${NO_FABRICATE_WRITE}

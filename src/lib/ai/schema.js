@@ -122,6 +122,18 @@ export function normalizeBlocks(list) {
   return out
 }
 
+// 一条答案是从问答来的，不代表它的内容属于「高频问法」。模型没拿到段落规范时
+// 容易图省事把整条答案都标成 qa，落库后那篇笔记就只剩一堆问答卡、断言和推导全没归位。
+// 判据：全塞进 qa、且真写成问答卡的不到一半 —— 这就是没按语义归位。
+export function sectionDumpIssue(blocks) {
+  const list = arr(blocks)
+  if (list.length < 2) return ''
+  if (list.some((b) => (b.section || 'core') !== 'qa')) return ''
+  const cards = list.filter((b) => b.type === 'qa').length
+  if (cards * 2 >= list.length) return ''
+  return `这 ${list.length} 块全标成了 qa（高频问法），但其中只有 ${cards} 块真是问答卡。段落按内容语义定，跟这次内容从哪来无关：能站住的断言进 core，公式 / 前提 / 推导 / 对比进 detail，只有「面试官会这么问 + 我怎么答」的卡才进 qa。`
+}
+
 // 去掉内部使用的 section 字段，只留真正的块字段
 export const stripSection = (b) => {
   const { section, ...rest } = b

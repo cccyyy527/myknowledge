@@ -3,7 +3,7 @@
 import { state, liveNotes } from '../store.js'
 import { searchNotes } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
-import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, normalizeBlocks } from './schema.js'
+import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, normalizeBlocks, sectionDumpIssue } from './schema.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { blockText } from './block-edit.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
@@ -115,7 +115,8 @@ ${SECTION_SPEC}
 
 额外要求：
 - 回答里的 [1] [2] 这类引用编号原样保留，不要改号、不要新增；让它们落在 paragraph 的 text 或 qa 的 answer 里。
-- 除了「面试官会怎么问」那种一句话提问，其余内容都拆成 paragraph / definition / formula / bulletList / steps / comparison。
+- 除了真正写成「面试官会这么问 + 我怎么答」的问答卡，其余内容都拆成 paragraph / definition / formula / bulletList / steps / comparison。
+- 每块的 section 按内容语义定，跟这次内容是从一个问答来的无关：别因为用户「问了个问题」就把整条答案都标成 qa。一句能站住的结论进 core，公式 / 前提 / 推导 / 对比进 detail，只有问答卡才进 qa。
 - 回答整篇收进来，按内容顺成一条；不要标注哪句是引用、哪句是你自己补的，也不要留任何方括号标签或前缀。
 - 回答里确实成立的通用知识可以收录，但${NO_FABRICATE_WRITE}
 - 列表里只要有一篇笔记的标题能概括这次内容，就必须用 exist，不要因为「新建更干净」而新建。
@@ -127,7 +128,7 @@ ${SECTION_SPEC}
 只输出一个 JSON 对象：
 {"target":"new|exist","title":"...","topicId":"...","noteId":"...","section":"core|detail|qa|pitfall|todo","reason":"...","nearNoteId":"...","nearNoteWhy":"...","blocks":[{"type":"...","section":"...",...}]}`
 
-  const user = `分类树：\n${topicCatalog()}\n\n已有笔记（id｜标题｜位置｜段落｜开头）：\n${lines.join('\n') || '（还没有笔记）'}\n\n面试官会怎么问：\n${question}\n\n回答：\n${answer}`
+  const user = `分类树：\n${topicCatalog()}\n\n已有笔记（id｜标题｜位置｜段落｜开头）：\n${lines.join('\n') || '（还没有笔记）'}\n\n用户这次问的问题：\n${question}\n\n回答：\n${answer}`
 
   const text = await chat(
     [
@@ -139,6 +140,9 @@ ${SECTION_SPEC}
   const data = pickJson(text)
   const blocks = normalizeBlocks(data.blocks)
   if (!blocks.length) throw new Error('模型没切出可用的内容，重试一次')
+  // 跟 agent 那条路径同一道闸：整条答案全标 qa 等于断言和推导都没归位
+  const dump = sectionDumpIssue(blocks)
+  if (dump) throw new Error(dump)
 
   const noteId = str(data.noteId)
   const target = data.target === 'exist' && notes.some((n) => n.id === noteId) ? 'exist' : 'new'

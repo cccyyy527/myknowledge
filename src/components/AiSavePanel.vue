@@ -72,6 +72,21 @@ const savingBlocks = computed(() => {
 
 const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
 
+// 「其实还有更该写进去的那篇」：模型被要求交代它放弃了谁，
+// 这里把它摆到明面上，用户点一下就改投过去，不用自己翻列表
+const alt = computed(() => {
+  const a = props.saving.alt
+  if (!a || props.saving.mode !== 'new') return null
+  const note = liveNoteById(a.noteId)
+  return note ? { ...a, title: note.title } : null
+})
+const useAlt = () => {
+  const a = alt.value
+  if (!a) return
+  props.saving.noteId = a.noteId
+  props.saving.mode = 'exist'
+}
+
 // 预览里的引用 chip：开新标签看原文，别把面板连同草稿一起关掉
 const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
 </script>
@@ -92,6 +107,13 @@ const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
       <p v-else class="ask-save-why">✨ {{ saving.reason }}</p>
       <button class="ask-save-retry" @click="emit('retry')">↻ 让 AI 重新判断</button>
     </template>
+
+    <div v-if="alt" class="ask-alt">
+      <span class="ask-alt-q">另一个落点</span>
+      <span class="ask-alt-t">《{{ alt.title }}》</span>
+      <span v-if="alt.why" class="ask-alt-w">没写进去是因为{{ alt.why }}</span>
+      <button class="ask-alt-go" @click="useAlt">改投这篇</button>
+    </div>
 
     <div class="ask-save-mode">
       <button :class="{ on: saving.mode === 'new' }" @click="saving.mode = 'new'">新建一篇</button>

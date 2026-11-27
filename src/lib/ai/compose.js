@@ -64,13 +64,15 @@ function noteDigest(note) {
 }
 
 // 新建还是追加，唯一判据是「已有那篇的标题还概括得了这次内容吗」。
-// 默认偏向新建：库里两篇标题略有重叠，比一篇什么都塞的大杂烩好收拾。
+// 默认偏向复用：库里多一篇讲同一件事的笔记，比一篇什么都塞的大杂烩更难受——
+// 用户搜的时候会命中两篇，读的时候还得自己比对哪篇更新。
 export const FILE_RULE = `新建一篇，还是追加进已有的某一篇 —— 只按一条判据决定：那篇笔记的标题，换成这次的内容还成立吗？
-- 成立（标题就是这个主题，或者那篇里的空小节 / 待补项正好是为这次的内容留的）→ 追加（exist / edit）。
-- 不成立（只是同一个大领域，把这次的标题换上去就不对了）→ 新建（new）。例：已有《CUPED 方差缩减》，这次讲的是「序贯检验的做法」，就该新建，不要塞进 CUPED 当一节。
+- 成立（标题就是这个主题，或者那篇里的空小节 / 待补项正好是为这次的内容留的）→ 追加（exist / edit）。这是默认选项。
+- 不成立（只是同一个大领域，把这次的标题换上去就不对了）→ 新建（new）。例：已有《CUPED 方差缩减》，这次讲的是「序贯检验的做法」，才该新建，不要塞进 CUPED 当一节。
 - 这次内容本身能独立成篇、面试时会被单独拎出来问 → 新建，别硬塞进相邻那篇当个小节。
-- 别为了「避免重复」把不同主题硬合并；也别因为搜到一篇同名空骨架就放弃新建 —— 空骨架只有在标题确实对得上时才填。
-- 拿不准就新建。`
+- 宁可追加到一篇略宽的标题下，也不要制造两篇讲同一件事的笔记：面试前一晚翻库，重复的两篇是要花时间分辨的。
+- 别因为搜到一篇同名空骨架就放弃新建 —— 空骨架只有在标题确实对得上时才填；也别为了「避免重复」把两个不相干的主题硬合并。
+- 判不出来就再读一遍候选那篇的小节：看它缺的正好是这次的内容，就追加。`
 
 export async function fileAnswer({ question, answer, used = [], cfg, signal } = {}) {
   const notes = liveNotes()
@@ -116,12 +118,14 @@ ${SECTION_SPEC}
 - 除了「面试官会怎么问」那种一句话提问，其余内容都拆成 paragraph / definition / formula / bulletList / steps / comparison。
 - 回答整篇收进来，按内容顺成一条；不要标注哪句是引用、哪句是你自己补的，也不要留任何方括号标签或前缀。
 - 回答里确实成立的通用知识可以收录，但${NO_FABRICATE_WRITE}
+- 列表里只要有一篇笔记的标题能概括这次内容，就必须用 exist，不要因为「新建更干净」而新建。
 - target 为 exist 时，noteId 必须原样复制笔记列表里出现过的 id，段落优先沿用那篇笔记已有的段落标题。
 - target 为 new 时，topicId 必须原样复制分类树里出现过的 id；title 要短，不带书名号。
-- reason 用一句话说明为什么这么归类，会展示给用户看。
+- target 为 new 时，nearNoteId 填你最犹豫「是不是该写进它」的那篇（必须是列表里的 id），nearNoteWhy 用一句话说清为什么放不进它。列表为空时这两个留空字符串。
+- reason 用一句话说明为什么这么归类，会展示给用户看；新建时要把「和《某篇》比，差在哪」写进这句里。
 
 只输出一个 JSON 对象：
-{"target":"new|exist","title":"...","topicId":"...","noteId":"...","section":"core|detail|qa|pitfall|todo","reason":"...","blocks":[{"type":"...","section":"...",...}]}`
+{"target":"new|exist","title":"...","topicId":"...","noteId":"...","section":"core|detail|qa|pitfall|todo","reason":"...","nearNoteId":"...","nearNoteWhy":"...","blocks":[{"type":"...","section":"...",...}]}`
 
   const user = `分类树：\n${topicCatalog()}\n\n已有笔记（id｜标题｜位置｜段落｜开头）：\n${lines.join('\n') || '（还没有笔记）'}\n\n面试官会怎么问：\n${question}\n\n回答：\n${answer}`
 
@@ -139,6 +143,9 @@ ${SECTION_SPEC}
   const noteId = str(data.noteId)
   const target = data.target === 'exist' && notes.some((n) => n.id === noteId) ? 'exist' : 'new'
   const section = SECTIONS.some((s) => s.id === data.section) ? data.section : blocks[0].section || 'core'
+  // 新建时把「本来也能写进哪篇」带出来，面板上一键就能改投，
+  // 不然用户只能看到「又是新建」，还得自己去找该并到哪
+  const near = target === 'new' ? notes.find((n) => n.id === str(data.nearNoteId)) : null
   return {
     target,
     title: str(data.title),
@@ -147,5 +154,6 @@ ${SECTION_SPEC}
     section,
     reason: str(data.reason),
     blocks,
+    alt: near ? { noteId: near.id, noteTitle: near.title, why: str(data.nearNoteWhy) } : null,
   }
 }

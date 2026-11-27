@@ -336,6 +336,7 @@ const blankTitle = (q) => (q.length > 38 ? q.slice(0, 38) + '…' : q)
 const applyProposal = (s, r) => {
   s.reason = stripMark(r.reason || '')
   s.err = ''
+  s.alt = r.alt || null
   if (r.target === 'edit') {
     s.mode = 'edit'
     s.noteId = r.noteId
@@ -378,6 +379,7 @@ const blankSaving = (t) => {
     plan: null,
     skipped: [],
     reason: '',
+    alt: null,
     analyzing: false,
     err: '',
     trace: [],

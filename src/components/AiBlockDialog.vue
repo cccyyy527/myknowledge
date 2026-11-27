@@ -98,12 +98,12 @@ const turn = async ({ act, text, question = '' }) => {
       onNoThinking: () => (noticed.value = true),
     })
     thread.value = r.messages || []
-    const n = r.blocks.length
-    // 一块都没给：要么只是答了一句话（insert 模式，原稿不动，保持上一版），要么是把原块整块删掉
-    if (n || r.mode !== 'insert') draft.value = { action: keepAct, mode: r.mode, blocks: r.blocks }
-    const head =
-      r.say ||
-      (n ? `${r.mode === 'replace' ? '改写' : '补'}好了 ${n} 块。` : '这轮没动块，只答了话。')
+    const ops = r.ops || []
+    // ops 是「这一版稿子和已落库的块差在哪」，不是「这轮动了什么」：上一轮改过、这轮只答话，
+    // 差异还在，预览照旧；差异归零说明模型把改动全撤回了，预览该跟着消失
+    if (ops.length) draft.value = { action: keepAct, mode: r.mode, ops, blocks: r.blocks }
+    else draft.value = null
+    const head = headOf(r.say, ops)
     stepChat(noticed.value ? `${head}（这次思考把额度吃光了，已自动关掉深度思考重跑）` : head)
   } catch (e) {
     stepChat(`出错了：${String(e.message || e)}`)
@@ -111,6 +111,61 @@ const turn = async ({ act, text, question = '' }) => {
     busy.value = ''
   }
 }
+
+// 面板上那句话：模型给了就用它的，没给就按改了几块凑一句
+const headOf = (say, ops) => {
+  if (say) return say
+  if (!ops.length) return '这轮没动块，只答了话。'
+  const c = countOf(ops)
+  const parts = []
+  if (c.replace) parts.push(`改 ${c.replace} 块`)
+  if (c.add && !c.move) parts.push(`加 ${c.add} 块`)
+  if (c.drop) parts.push(`删 ${c.drop} 块`)
+  if (c.move) parts.push(`挪 ${c.move} 块`)
+  return `好了：${parts.join('、')}。`
+}
+
+const countOf = (ops) => {
+  const moves = new Set(
+    ops.filter((o) => o.op === 'drop' && ops.some((x) => x.op === 'add' && x.id === o.id)).map((o) => o.id),
+  )
+  const c = { replace: 0, add: 0, drop: 0, move: 0 }
+  for (const o of ops) {
+    if (moves.has(o.id)) {
+      if (o.op === 'add') c.move++
+    } else c[o.op]++
+  }
+  return c
+}
+
+// 跨段挪动在 ops 里是一对「删掉 + 插回」，预览里合成一行「挪段」更好读
+const rows = computed(() => {
+  const ops = draft.value?.ops || []
+  const moves = new Set(
+    ops.filter((o) => o.op === 'drop' && ops.some((x) => x.op === 'add' && x.id === o.id)).map((o) => o.id),
+  )
+  const from = new Map(ops.filter((o) => o.op === 'drop').map((o) => [o.id, o]))
+  const out = []
+  for (const o of ops) {
+    if (moves.has(o.id)) {
+      if (o.op !== 'add') continue
+      out.push({ ...o, op: 'move', from: from.get(o.id)?.title || '' })
+    } else out.push(o)
+  }
+  return out
+})
+
+const tally = computed(() => countOf(draft.value?.ops || []))
+const tallyText = computed(() => {
+  const c = tally.value
+  const parts = []
+  if (c.replace) parts.push(`改 ${c.replace} 块`)
+  if (c.add) parts.push(`加 ${c.add} 块`)
+  if (c.drop) parts.push(`删 ${c.drop} 块`)
+  if (c.move) parts.push(`挪 ${c.move} 块`)
+  return parts.join('、') || '没有改动'
+})
+const LABEL = { replace: '改写', add: '新增', drop: '删掉', move: '挪段' }
 
 const run = (action) => turn({ act: action, text: action.label })
 
@@ -123,8 +178,8 @@ const runAsk = () => {
 }
 
 const apply = () => {
-  if (!draft.value) return
-  emit('apply', { action: { ...draft.value.action, mode: draft.value.mode }, blocks: draft.value.blocks })
+  if (!draft.value?.ops?.length) return
+  emit('apply', { action: { ...draft.value.action, mode: draft.value.mode }, ops: draft.value.ops })
   emit('close')
 }
 </script>
@@ -190,19 +245,18 @@ const apply = () => {
       <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
 
       <template v-if="draft">
-        <p v-if="!draft.blocks.length && draft.mode === 'replace'" class="ai-hint">
-          预览（0 块）→ 点「采用」会把这一块整块删掉
-        </p>
-        <p v-else class="ai-hint">
-          预览（{{ draft.blocks.length }} 块）→ 点「采用」才会写进笔记，
-          <template v-if="draft.mode === 'insert'">
-            <template v-if="draft.action?.target">会加到「{{ draft.action.target }}」这一节的末尾</template>
-            <template v-else>会插到这一块后面</template>
-          </template>
-          <template v-else>会替换现在这一块</template>
-        </p>
+        <p class="ai-hint">预览（{{ tallyText }}）→ 点「采用」才会写进笔记</p>
         <div class="ai-preview">
-          <BlockView v-for="b in draft.blocks" :key="b.id" :block="b" />
+          <div class="ai-diff">
+            <div v-for="(o, i) in rows" :key="`${o.op}-${o.id}-${i}`" class="df-row" :class="`df-${o.op}`">
+              <span class="df-tag">{{ LABEL[o.op] }}</span>
+              <div class="df-body">
+                <p v-if="o.op === 'move'" class="df-from">{{ o.from }} → {{ o.title }}</p>
+                <p v-else-if="o.op === 'add'" class="df-from">加到「{{ o.title }}」</p>
+                <BlockView v-if="o.op === 'drop' ? o.before : o.block" :block="o.op === 'drop' ? o.before : o.block" />
+              </div>
+            </div>
+          </div>
         </div>
         <div class="ai-acts">
           <button class="ai-primary" @click="apply">采用</button>

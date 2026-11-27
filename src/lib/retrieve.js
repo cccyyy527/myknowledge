@@ -97,7 +97,24 @@ export function noteText(note, { budget = 7000, ids = false } = {}) {
   return text.length > budget ? `${text.slice(0, budget)}\n…（后面截掉了）` : text
 }
 
-// agent 的 search_notes 用：轻量摘要 + 是否空笔记
+// 这篇已经写了哪些小节、各几块：归档时判断「塞进去」还是「另起一篇」就看这个
+export function sectionStats(note) {
+  const out = []
+  let sec = ''
+  for (const b of note.blocks || []) {
+    if (b.type === 'heading') {
+      sec = b.text || ''
+      continue
+    }
+    if (!blockText(b).trim()) continue
+    const hit = out.find((x) => x.title === sec)
+    if (hit) hit.n++
+    else out.push({ title: sec, n: 1 })
+  }
+  return out
+}
+
+// agent 的 search_notes 用：轻量摘要 + 是否空笔记 + 各小节已写多少
 export function noteBrief(note, idx) {
   const path = topicPath(note.topicId).map((t) => t.name).join(' / ')
   const lead = (note.blocks || [])
@@ -110,6 +127,8 @@ export function noteBrief(note, idx) {
     path: path || '未归类',
     tags: note.tags || [],
     empty: noteIsEmpty(note),
+    count: (note.blocks || []).filter((b) => b.type !== 'heading' && blockText(b).trim()).length,
+    sections: sectionStats(note),
     lead: lead.slice(0, 80),
     idx,
   }

@@ -1,7 +1,7 @@
 // L3.5 agent：模型自己查、自己读、自己决定归档
 
 import { liveNoteById } from '../store.js'
-import { searchNotes, noteText, noteIsEmpty } from '../retrieve.js'
+import { searchNotes, noteText, noteIsEmpty, noteBrief } from '../retrieve.js'
 import { loadAI, isAiReady, thinkOn, chatStreamTools } from './client.js'
 import { SECTIONS, str, normalizeBlocks, stripMark, OUTSIDE_MARK } from './schema.js'
 import { planEdits } from './block-edit.js'
@@ -111,9 +111,9 @@ export const TOOLS = [
         properties: {
           mode: {
             type: 'string',
-            enum: ['new', 'exist', 'edit'],
+            enum: ['exist', 'edit', 'new'],
             description:
-              'new 新建一篇（已有笔记的标题概括不了这次内容时用它）；exist 往已有笔记对应小节末尾追加新块；edit 改已有笔记里具体的块（改写 / 删除 / 就地插入）',
+              'exist 往已有笔记对应小节末尾追加新块（默认选项：库里已有笔记能装下这次内容就用它）；edit 改已有笔记里具体的块（改写 / 删除 / 就地插入 / 补公式注解）；new 新建一篇（只有已有笔记的标题换不掉、或者这次是全新主题时才用，且必须填 nearNoteId 交代你放弃了哪篇）',
           },
           noteId: {
             type: 'string',
@@ -121,6 +121,15 @@ export const TOOLS = [
           },
           topicId: { type: 'string', description: 'mode=new 时必填，取自 list_topics' },
           title: { type: 'string', description: 'mode=new 时的笔记标题，要短，不带书名号' },
+          nearNoteId: {
+            type: 'string',
+            description:
+              'mode=new 时必填：你最犹豫「是不是该写进它」的那篇（取自 search_notes 的 id）。用户会在面板上一键切过去，所以别敷衍——真读过它再填。库里一篇候选都没有时留空。',
+          },
+          nearNoteWhy: {
+            type: 'string',
+            description: 'mode=new 时用一句话说清：为什么这次内容放进上面那篇不合适（标题换了就不成立 / 面试会单独问 / 那篇已经专讲别的角度）。',
+          },
           section: {
             type: 'string',
             enum: SECTION_IDS,
@@ -190,10 +199,17 @@ function runTool(ctx, call) {
       const n = citeIndex(ctx, liveNoteById(h.id) || h)
       const flags = h.empty ? '｜空笔记（只有小节标题，没有正文）' : h.lead ? `｜开头：${h.lead}` : ''
       const tags = h.tags.length ? `｜标签：${h.tags.join('、')}` : ''
-      return `[${n}] 《${h.title}》（id: ${h.id}）｜位置：${h.path}${flags}${tags}`
+      const stat = h.empty
+        ? ''
+        : `｜已有 ${h.count} 块${h.sections.length ? `：${h.sections.map((s) => `${s.title || '（无小节）'} ${s.n}`).join('、')}` : ''}`
+      ctx.seen.set(h.id, h)
+      return `[${n}] 《${h.title}》（id: ${h.id}）｜位置：${h.path}${stat}${flags}${tags}`
     })
+    const hint = ctx.seen.size
+      ? '\n要归档时：这几篇里只要有一篇的标题能概括这次内容，就该并进去（exist / edit），别另起一篇重复的。'
+      : ''
     return {
-      content: `找到 ${hits.length} 篇（编号用于回答里的 [n]）：\n${lines.join('\n')}`,
+      content: `找到 ${hits.length} 篇（编号用于回答里的 [n]）：\n${lines.join('\n')}${hint}`,
       summary: `🔍 查「${q}」→ ${hits.length} 篇`,
     }
   }
@@ -205,6 +221,7 @@ function runTool(ctx, call) {
     }
     const n = citeIndex(ctx, note)
     const empty = noteIsEmpty(note)
+    ctx.read.add(note.id)
     return {
       content: `[${n}] ${noteText(note, { ids: true })}`,
       summary: `📖 读《${note.title}》→ ${empty ? '空笔记' : '正文'}`,
@@ -260,6 +277,29 @@ function runTool(ctx, call) {
     }
     const oldNote = liveNoteById(str(args.noteId))
     const mode = args.mode === 'exist' && oldNote ? 'exist' : 'new'
+    const nearId = str(args.nearNoteId)
+    const near = nearId ? liveNoteById(nearId) : null
+
+    // 新建是最省事但也最容易造重复的选项。库里查到过候选、却没读过任何一篇就新建，
+    // 一律打回：先看一遍再决定，这是「总是倾向新建」的主要来源。
+    if (mode === 'new' && ctx.seen.size) {
+      if (!near) {
+        const cands = [...ctx.seen.values()]
+          .sort((a, b) => b.count - a.count)
+          .map((h) => `- 《${h.title}》（id: ${h.id}）${h.empty ? '空笔记' : `已有 ${h.count} 块`}`)
+          .join('\n')
+        return {
+          content: `库里查到过这些相关笔记，你不能直接新建：\n${cands}\n先 read_note 读最接近的那篇，然后二选一——能装下就改成 mode=exist / edit；确实装不下就继续 new，但要把那篇填进 nearNoteId，并在 nearNoteWhy 里说清为什么放不进它。`,
+          summary: '🗂 打回：新建前没读候选笔记',
+        }
+      }
+      if (!ctx.read.has(near.id)) {
+        return {
+          content: `nearNoteId 指向《${near.title}》，但你这一轮没读过它的正文。先 read_note（id: ${near.id}）看清楚它已经写了什么，再回答「这次内容放进去合不合适」。`,
+          summary: `🗂 打回：没读《${near.title}》就判它不合适`,
+        }
+      }
+    }
     const topicId = mode === 'exist' ? oldNote.topicId : topicExists(args.topicId) ? args.topicId : fallbackTopicId()
     ctx.proposal = {
       target: mode,
@@ -269,13 +309,16 @@ function runTool(ctx, call) {
       section: SECTIONS.some((s) => s.id === args.section) ? args.section : blocks[0].section || 'core',
       reason: stripMark(str(args.reason)),
       blocks,
+      // 用户能不能一眼看出「其实还有更好的落点」，全靠这一对
+      alt: mode === 'new' && near ? { noteId: near.id, noteTitle: near.title, why: stripMark(str(args.nearNoteWhy)) } : null,
     }
     const where =
       mode === 'exist'
         ? `写进《${oldNote.title}》${blocks.length} 块`
         : `新建《${str(args.title) || '未命名'}》${blocks.length} 块`
+    const alt = ctx.proposal.alt ? `；备选落点《${ctx.proposal.alt.noteTitle}》会一并给用户看` : ''
     return {
-      content: `提案已记录：${where}。用户可以改也可以取消——不要再提交一遍，也不要在正文里复述这些块。`,
+      content: `提案已记录：${where}${alt}。用户可以改也可以取消——不要再提交一遍，也不要在正文里复述这些块。`,
       summary: `🗂 归档：${where}`,
     }
   }
@@ -298,7 +341,15 @@ export async function agentRun({
   if (!isAiReady(cfg || loadAI())) throw new Error('还没填 API Key，先到「设置」里配一下')
   const conf = cfg || loadAI()
   const msgs = [...messages]
-  const ctx = { refs: refs.map((r) => ({ ...r })), proposal: null }
+  // 问答那轮已经引用过的笔记算「查过也读过」：续聊时模型不会重搜一遍，
+  // 不预先灌进来会把它已经看过的候选当成没看过而打回
+  const cited = refs.map((r) => ({ id: r.id, note: liveNoteById(r.id) })).filter((x) => x.note)
+  const ctx = {
+    refs: refs.map((r) => ({ ...r })),
+    proposal: null,
+    seen: new Map(cited.map((x) => [x.id, noteBrief(x.note, 0)])),
+    read: new Set(cited.map((x) => x.id)),
+  }
   // 思考开关一旦降级或这一轮没产出思考内容，后面就一路关着：历史里的 assistant 消息已经
   // 缺 reasoning_content，DeepSeek 在思考模式下会因此直接 400，补不回来了
   let think = thinkOn(conf)
@@ -385,8 +436,10 @@ export function askAgent({ question, history = [], cfg, strict = false, skill, e
   return agentRun({ messages, cfg, strict, ...rest })
 }
 
-const ARCHIVE_NUDGE = `把上面这轮问答存进知识库：
-- 先 search_notes 查有没有同主题的笔记，再决定是新建还是追加。
+const ARCHIVE_NUDGE = `把上面这轮问答存进知识库。落点怎么选，按这个顺序想：
+1. 先 search_notes 查同主题笔记。命中里只要有一篇的标题能概括这次内容，就落在它身上——内容是补充就往对应小节追加（exist），是在纠正/改写已有块的说法就用 edit。
+2. 拿不准能不能装下时 read_note 读那篇，看它已有小节都写了什么、缺的是什么。宁可追加到一篇略宽的标题下，也不要制造两篇讲同一件事的笔记。
+3. 只有当「放进那篇会让标题名不副实」或者「这确实是库里还没有的新主题」才新建；新建时 nearNoteId 必须填你放弃的那篇，nearNoteWhy 一句话说清为什么它装不下。
 ${FILE_RULE}
 - 追加进已有笔记时，需要的话 read_note 看它已有的小节和块 id。
 - 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason，以及 blocks 或 edits。

@@ -4,3 +4,5 @@ data/
 *.local
 .DS_Store
 .vite/
+tmp-*
+cm.txt

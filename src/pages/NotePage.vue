@@ -14,6 +14,7 @@ import {
   newBlockId,
   noteBadges,
   insertBlocks,
+  idifyBlocks,
   createNote,
   flattenTopics,
   state,
@@ -402,15 +403,29 @@ onBeforeUnmount(() => {
   touchMq?.removeEventListener?.('change', syncTouch)
 })
 
-const applyAi = ({ action, blocks }) => {
-  if (!aiTarget.value) return
-  const clean = blocks.map((b) => {
-    const { section, ...rest } = b
-    return rest
-  })
-  if (action.mode === 'insert' && action.target) insertIntoSection(action.target, clean)
-  else if (action.mode === 'insert') note.value.blocks.splice(aiTarget.value.index + 1, 0, ...clean)
-  else note.value.blocks.splice(aiTarget.value.index, 1, ...clean)
+// 段落的 AI 改动是一串按块 id 的 op（改写 / 删掉 / 新增），可能跨段，所以不能再按下标 splice
+const applyAi = ({ ops }) => {
+  if (!note.value || !ops?.length) return
+  const list = note.value.blocks
+  idifyBlocks(ops.filter((o) => o.op === 'add' && o.block).map((o) => o.block))
+  // 先做删和改：都靠 id 定位，顺序无关；加块留到最后，免得它的 after 被别人挤走
+  for (const o of ops) {
+    if (o.op === 'drop') {
+      const i = list.findIndex((b) => b.id === o.id)
+      if (i >= 0) list.splice(i, 1)
+    } else if (o.op === 'replace') {
+      const i = list.findIndex((b) => b.id === o.id)
+      if (i >= 0) list.splice(i, 1, { ...o.block, id: o.id })
+    }
+  }
+  for (const o of ops) {
+    if (o.op !== 'add' || !o.block) continue
+    const b = { ...o.block, id: o.id || newBlockId() }
+    const i = o.after ? list.findIndex((x) => x.id === o.after) : -1
+    // after 那块不在这一节（模型把块挪到别段了），就走段落末尾，别插错地方
+    if (i >= 0 && (!o.title || sectionTitleOf(i) === o.title)) list.splice(i + 1, 0, b)
+    else insertIntoSection(o.title || sectionTitleOf(0), [b])
+  }
   aiTarget.value = null
 }
 

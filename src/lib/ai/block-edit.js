@@ -14,6 +14,7 @@ import {
   stripMark,
   SEC_IDS,
   secOk,
+  secTitle,
   BLOCK_ARG,
   AFTER_ARG,
 } from './schema.js'
@@ -124,16 +125,10 @@ export const blockText = (b) =>
     .filter(Boolean)
     .join(' | ')
 
-// 让模型知道上下文：笔记标题 + 当前段落 + 同段落其他块
-function noteContext(note, sectionTitle, block) {
+// 首轮上下文：笔记标题 + 所在段落。别的块不用在这儿列，整篇稿子在下面
+function noteContext(note, sectionTitle) {
   const lines = [`笔记标题：${note?.title || ''}`]
   if (sectionTitle) lines.push(`所在段落：${sectionTitle}`)
-  const siblings = (note?.blocks || [])
-    .filter((b) => b.id !== block.id && b.type !== 'heading')
-    .slice(0, 12)
-    .map((b) => `- [${b.type}] ${blockText(b).slice(0, 160)}`)
-    .filter((s) => s.length > 12)
-  if (siblings.length) lines.push(`同篇笔记其他块：\n${siblings.join('\n')}`)
   return lines.join('\n')
 }
 
@@ -149,28 +144,31 @@ const ACTION_PROMPT = {
     '根据这个块的内容，生成 1-2 条真实容易踩的坑：现象 / 原因 / 怎么避免，type 用 pitfall，section 用 pitfall，全部用 add_block 加在原块后面。要具体，不要泛泛而谈。',
 }
 
-// 自由提问 / 自由要求：模型自己判断是「回答后补块」还是「直接改这一块」
-const CUSTOM_SPEC = (ask) => `用户对这个块说的话：${ask}
+// 自由提问 / 自由要求：模型自己判断是「回答问题后补块」还是「改块」，也能被指到别处去
+const CUSTOM_SPEC = (ask) => `用户对这一块（原块）说的话：${ask}
 
-按他这句话处理这个块：
-- 如果是在提问（问机制、问区别、问「面试官追问怎么答」）：正面回答，再把回答整理成知识块用 add_block 加进去 —— 结论和机制用 paragraph，问法与答法用 qa，易错点用 pitfall，对比用 comparison。原块不动。
-- 如果是在要求改写（写短点、加推导、换个说法、补对比）：用 rewrite_block 按他要求的范围重写原块。
+按他这句话处理：
+- 在提问（问机制、问区别、问「面试官追问怎么答」）：正面回答，再把回答整理成知识块用 add_block 加进去 —— 结论和机制用 paragraph，问法与答法用 qa，易错点用 pitfall，对比用 comparison。原块不动。
+- 在要求改写（写短点、加推导、换个说法、补对比）：用 rewrite_block 按他要求的范围重写原块。
+- 说的是别处（「顺带把上面那块也改掉」「把重复的那块删了」「这块应该挪到推导段」）：照做，用稿子里的 id 定位，跨段也行。
 - ${NO_FABRICATE_WRITE}`
 
-// 单个块的改动一般三五步就说完，太长没必要；前两条（system + 开场上下文）常驻
+// 单个块的改动一般三五步就说完；跨块改会多一些，留一点余量
 const MAX_BLOCK_THREAD = 15
 
 // 工具循环的安全阀：正常 2-4 轮就交差，绕圈说明 prompt 或模型跑偏了
-const MAX_BLOCK_ROUNDS = 8
+const MAX_BLOCK_ROUNDS = 12
 
-const blockSystem = (thinking, insertOnly) => `你在帮用户改一篇数据分析面试知识笔记里的一个块，是连续对话：用户会一轮轮提要求，你能看到自己前面几轮改出来的稿子，可以接着改、也可以只回答他的问题。你产出的内容最后会写进这篇笔记。
+const blockSystem = (thinking, insertOnly) => `你在帮用户改一篇数据分析面试知识笔记，入口是其中一块（下称「原块」），是连续对话：用户会一轮轮提要求，你能看到整篇稿子的当前样子，可以接着改、也可以只回答他的问题。你产出的改动最后会写进这篇笔记。
 ${BLOCK_SPEC}
 ${SECTION_SPEC}
 
 怎么干：
-- 稿子里的块都带 id。用工具一块一块改，每调一个工具程序就真改一处，并回你一句结果（改好了，还是 id 打错了），接着调下一个就行，没人催你。
-- 全部改到位后调 finish_block 收尾，收尾之后不要再输出正文。要跟用户说的那句话放在 finish_block 的 say 里（≤60 字，像人说话，别复述字段名）。
-- 只动这一块、以及能补在它旁边的块。别去改这篇笔记的别处 —— 那是整篇助手的活。
+- 稿子就是整篇笔记，按文档顺序排，每块都带 id。## 开头的是段落标题，程序按段落生成，别动它。
+- 默认只动原块、以及能补在它旁边的块。用户明确说到别处（「顺带把上面那块也改掉」「把重复的那块删了」「这块挪到推导段」）就照做，跨块跨段都行，用 id 定位。
+- 别顺手重排全文、别改用户没提的块：每改一块都有代价，用户要能一眼看出你动了哪儿。
+- 用工具一块一块改，每调一个工具程序就真改一处，并回你一句结果（改好了，还是 id 打错了），接着调下一个就行，没人催你。
+- 全部改到位后调 finish_block 收尾，收尾之后不要再输出正文。要跟用户说的那句话放在 finish_block 的 say 里（≤60 字，像人说话，别复述字段名；动过好几块就说清动了哪几块）。
 ${insertOnly ? '- 这一轮是「在原块后面补内容」：原块一个字都不改，只用 add_block。\n' : ''}
 工具：
 - rewrite_block 改写稿子里的一块：换说法、换块类型、扩写、把两块并成一块都走它
@@ -180,32 +178,69 @@ ${insertOnly ? '- 这一轮是「在原块后面补内容」：原块一个字�
 
 规则：
 - 用户可能已经跟你聊过几轮：稿子就是上一轮的成品。只做这一轮要求的微调，别把它改好的地方又改回去，也别重复做完的事。
-- 不要输出 heading 块，段落由 section 字段决定。
+- 不要输出 heading 块，段落由 section 字段决定；rewrite_block 里给了 section 就是要把这块挪到那一节。
 - ${NO_FABRICATE_WRITE}${thinking ? '\n- 每一步只想这一个动作，别在思考里把整段稿子预演一遍 —— 后面的步骤等看到前一步的结果再想。' : ''}`
 
 // 「现在这一块长什么样」：把块摊成一行给模型看，省 token
 const blockLine = (b) => `[${b.type}] ${blockText(b)}`
 
-// 稿子摆给模型看：带 id（工具要引用）、标出哪一块是原块
-const draftOf = (plan) =>
-  plan.length
-    ? plan
-        .map((e, i) => `${i + 1}. ${e.id}${e.root ? '（原块）' : ''} [${e.block.type}] ${blockText(e.block)}`)
+// 稿子摆给模型看：整篇按顺序，带 id（工具要引用）、标出哪一块是原块。
+// 整篇塞进来会把 prompt 撑大，所以每块只给开头一段；真要全文的那块另有 blockLine
+const brief = (s) => (s.length > 200 ? `${s.slice(0, 200)}…` : s)
+
+const draftOf = (entries) =>
+  entries.length
+    ? entries
+        .map((e, i) =>
+          e.head
+            ? `## ${e.block.text}`
+            : `${i + 1}. ${e.id}${e.root ? '（原块）' : ''} [${e.block.type}] ${brief(blockText(e.block))}`,
+        )
         .join('\n')
     : '（现在稿子里没有块）'
 
-/* ---------- 计划：模型每调一次工具就在这上面改一笔 ---------- */
+/* ---------- 稿子：模型每调一次工具就在这上面改一笔 ---------- */
 
-const secOf = (b) => (SECTIONS.some((s) => s.id === b?.section) ? b.section : 'core')
+const bodyOf = (b) => {
+  const { id: _id, section: _s, ...rest } = b || {}
+  return rest
+}
 
-// 首轮从原块起手；续聊从上一轮的成品起手（insert 模式下原块不在稿子里，所以没有 root 行）
-const planOf = (live, block, prevMode) => {
-  const hasRoot = prevMode !== 'insert'
-  const list = arr(live).length ? arr(live) : hasRoot ? [{ ...block }] : []
-  return list.map((b, i) => {
-    const { id, section: _s, ...rest } = b
-    return { id: str(id) || `blk-${i + 1}`, section: secOf(b), block: rest, root: hasRoot && i === 0, op: 'keep' }
+const secIdOfTitle = (t) => (SECTIONS.find((s) => s.title === str(t)) || {}).id || ''
+
+// 段落归属靠 heading 的位置算（块本身不存 section 字段）；上一轮挪过段的块，位置已经在目标段里
+const entriesOf = (list) => {
+  let sec = SECTIONS[0].id
+  let title = SECTIONS[0].title
+  return arr(list).map((b) => {
+    if (b?.type === 'heading' && b.level === 2) {
+      sec = secIdOfTitle(b.text)
+      title = str(b.text)
+      return { id: str(b.id), section: sec, title, head: true, block: bodyOf(b) }
+    }
+    return { id: str(b.id), section: sec, title, block: bodyOf(b) }
   })
+}
+
+// 稿子 vs 原笔记：按 id 算改动。跨段挪动拆成「删掉 + 按新位置插回」，落库时不用另照顾
+const opsOf = (entries, note, rootId) => {
+  const old = entriesOf(note?.blocks)
+  const oldById = new Map(old.map((e) => [e.id, e]))
+  const live = new Set(entries.map((e) => e.id))
+  const ops = []
+  for (const e of old) if (!live.has(e.id)) ops.push({ op: 'drop', id: e.id, title: e.title, before: e.block })
+  let prev = ''
+  for (const e of entries) {
+    const o = oldById.get(e.id)
+    if (!o) ops.push({ op: 'add', id: e.id, after: prev, title: e.title, block: e.block })
+    else if (!e.head && o.section !== e.section) {
+      ops.push({ op: 'drop', id: e.id, title: o.title, before: o.block })
+      ops.push({ op: 'add', id: e.id, after: prev, title: e.title, block: e.block })
+    } else if (JSON.stringify(o.block) !== JSON.stringify(e.block))
+      ops.push({ op: 'replace', id: e.id, title: e.title, block: e.block })
+    prev = e.id
+  }
+  return ops.map((o) => (o.id === rootId ? { ...o, root: true } : o))
 }
 
 // 工具给的块内容过一遍 normalizeBlocks：未知类型 / 空内容会被洗干净或直接丢掉
@@ -229,7 +264,7 @@ function blockTools() {
           type: 'object',
           properties: {
             id: { type: 'string', description: '块 id，原样引用稿子里给出来的那个' },
-            section: { type: 'string', enum: SEC_IDS, description: '顺手换段才填，不填就留在原段' },
+            section: { type: 'string', enum: SEC_IDS, description: '要把这块挪到别段才填，不填就留在原段' },
             block: BLOCK_ARG,
           },
           required: ['id', 'block'],
@@ -245,7 +280,7 @@ function blockTools() {
           type: 'object',
           properties: {
             block: BLOCK_ARG,
-            section: { type: 'string', enum: SEC_IDS, description: '不填就跟着原块那一节' },
+            section: { type: 'string', enum: SEC_IDS, description: '加到哪一节；不填就跟 after 那块同一节，再不然跟原块同一节' },
             after: AFTER_ARG,
           },
           required: ['block'],
@@ -278,11 +313,15 @@ function blockTools() {
 
 function runBlockTool(ctx, name, raw) {
   const args = raw && typeof raw === 'object' ? raw : {}
-  const plan = ctx.plan
+  const plan = ctx.entries
   const id = str(args.id).trim()
   const at = plan.findIndex((e) => e.id === id)
-  const ids = () => plan.map((e) => e.id).join('、') || '（现在稿子里没有块）'
-  const noSuch = () => reply(`没有 id 为「${id}」的块，这一下没生效。现在稿子里的 id：${ids()}`, '⚠ 找不到块')
+  const ids = () =>
+    plan.filter((e) => !e.head).map((e) => e.id).join('、') || '（现在稿子里没有块）'
+  const noSuch = () =>
+    reply(`没有 id 为「${id}」的块，这一下没生效。稿子里的 id：${ids()}（段落标题不用 id）`, '⚠ 找不到块')
+  const noHead = () =>
+    reply('段落标题是程序按段落生成的，改不了也删不了；要调位置就改 add_block 的 after。', '⚠ 标题块不动')
 
   if (name === 'finish_block') {
     ctx.say = stripMark(args.say) || ctx.say
@@ -291,57 +330,84 @@ function runBlockTool(ctx, name, raw) {
   }
 
   if (name === 'rewrite_block') {
-    // insert 那一路是「原块不动、只往后面加」：偷偷改原块会让用户看不出笔记被动了。
-    // insert 的稿子里本来就没有原块，所以这种情况会落到「找不到 id」，要先说清原因
-    if (at < 0 && ctx.insertOnly && id === str(ctx.block?.id))
+    // insert 那一路是「原块不动、只往后面加」：偷偷改原块会让用户看不出笔记被动了
+    if (id === str(ctx.block.id) && ctx.insertOnly)
       return reply(
         '这一轮只往原块后面加内容，原块一个字都不改。要加就用 add_block；要改原块文字，请用户单独点「润色」。',
         '⚠ 原块不动',
       )
     if (at < 0) return noSuch()
     const e = plan[at]
-    if (e.root && ctx.insertOnly)
-      return reply('这一轮是原块后面补内容，原块不动。要改原块文字请让用户单独点「润色」。', '⚠ 原块不动')
-    const got = cleanBlock(args.block, secOk(args.section) || e.section)
+    if (e.head) return noHead()
+    const sec = secOk(args.section)
+    const got = cleanBlock(args.block, sec || e.section)
     if (!got)
       return reply('这块内容是空的、或者块类型不认识，没写进去。按块类型规范给全字段再调一次。', '⚠ 块不完整')
     e.block = got.block
-    e.section = got.section
-    e.op = 'replace'
-    if (e.root) ctx.touched = true
-    return reply(`已改写 ${e.id}。`, '✏ 改写一块')
+    const moved = !!sec && sec !== e.section
+    if (moved) {
+      // 真把这块挪到目标段的末尾：光改 section 字段没用，位置不动等于没挪
+      e.section = got.section
+      e.title = secTitle(got.section)
+      plan.splice(at, 1)
+      let end = -1
+      plan.forEach((x, i) => {
+        if (x.section === e.section) end = i
+      })
+      plan.splice(end >= 0 ? end + 1 : plan.length, 0, e)
+    }
+    if (e.id === str(ctx.block.id)) ctx.touched = true
+    return reply(
+      `已改写 ${e.id}${moved ? `（挪到「${e.title}」）` : ''}。`,
+      moved ? '✏ 改写并挪段' : '✏ 改写一块',
+    )
   }
 
   if (name === 'add_block') {
-    const got = cleanBlock(args.block, secOk(args.section) || secOf(ctx.block))
+    const after = str(args.after).trim()
+    const anchor = after
+      ? plan.findIndex((x) => x.id === after)
+      : plan.findIndex((x) => x.id === str(ctx.block.id))
+    // after 给了却对不上，别默默塞到文末 —— 位置错了用户很难发现
+    if (after && anchor < 0)
+      return reply(
+        `没有 id 为「${after}」的块，这块没加。稿子里的 id：${ids()}；不想指定位置就省略 after。`,
+        '⚠ 找不到 after',
+      )
+    const host = anchor >= 0 ? plan[anchor] : null
+    const sec = secOk(args.section) || host?.section || SECTIONS[0].id
+    const got = cleanBlock(args.block, sec)
     if (!got)
       return reply('这块内容是空的、或者块类型不认识，没加进去。按块类型规范给全字段再调一次。', '⚠ 块不完整')
-    const e = { id: `pending-${++ctx.seq}`, section: got.section, block: got.block, root: false, op: 'add' }
-    const after = str(args.after).trim()
-    const i = after ? plan.findIndex((x) => x.id === after) : -1
-    if (i < 0) plan.push(e)
-    else plan.splice(i + 1, 0, e)
-    return reply(
-      `已加了 1 块，临时 id 是 ${e.id}（后面还要动它就用这个 id）。`,
-      '➕ 新增一块',
-    )
+    const e = { id: bid(), section: got.section, title: secTitle(got.section), block: got.block }
+    // 位置要跟着 section 走：说加到「高频问法」，就不能插在核心结论那块后面
+    let at2 = anchor + 1
+    if (got.section !== host?.section) {
+      let end = -1
+      plan.forEach((x, i) => {
+        if (x.section === got.section) end = i
+      })
+      at2 = end >= 0 ? end + 1 : plan.length
+    }
+    if (at2 > 0) plan.splice(at2, 0, e)
+    else plan.push(e)
+    return reply(`已加了 1 块，id 是 ${e.id}（后面还要动它就用这个 id）。`, '➕ 新增一块')
   }
 
   if (name === 'drop_block') {
     if (at < 0) return noSuch()
-    const [e] = plan.splice(at, 1)
-    if (e.root) ctx.touched = true
-    return reply(e.root ? '原块已从这版稿子里去掉。' : `已删掉 ${e.id}。`, '🗑 删一块')
+    const e = plan[at]
+    if (e.head) return noHead()
+    plan.splice(at, 1)
+    if (e.id === str(ctx.block.id)) ctx.touched = true
+    return reply(e.id === str(ctx.block.id) ? '原块已从这版稿子里去掉。' : `已删掉 ${e.id}。`, '🗑 删一块')
   }
 
   return reply(`没有叫 ${name} 的工具。`, '⚠ 工具不存在')
 }
 
-// 计划 → 要落进笔记的块。insert 模式下原块不跟着走（它本来就不该被替换）
-const toBlocks = (ctx, mode) =>
-  ctx.plan
-    .filter((e) => !(e.root && e.op === 'keep' && mode === 'insert'))
-    .map((e) => ({ id: e.root ? ctx.block.id : bid(), section: e.section, ...e.block }))
+// 稿子 → 原笔记形状的块数组：下一轮接着用（段落归属由 heading 位置再算一遍）
+const toBlocks = (entries) => entries.map((e) => ({ id: e.id, ...e.block }))
 
 export async function rewriteBlock({
   action,
@@ -366,25 +432,24 @@ export async function rewriteBlock({
   const hist = arr(messages)
   // 一段对话里做法要稳定：中途从 insert 跳到 replace 会把原块冲掉
   const insertOnly = prevMode === 'insert' || (!prevMode && preset?.mode === 'insert')
-  const ctx = {
-    plan: planOf(arr(blocks), block, prevMode),
-    block,
-    insertOnly,
-    touched: false,
-    say: '',
-    done: false,
-    seq: 0,
-  }
+  const rootId = str(block.id)
+  // 稿子 = 整篇笔记。续聊时用上一轮交回来的成品（还没落库的那一版），否则用笔记现在的样子
+  const entries = entriesOf(arr(blocks).length ? arr(blocks) : note?.blocks)
+  entries.forEach((e) => {
+    if (e.id === rootId) e.root = true
+  })
+  const ctx = { entries, block, insertOnly, touched: false, say: '', done: false }
 
-  const ctxText = noteContext(note, sectionTitle, block)
-  // 首轮：整篇上下文 + 原块 + 这次要干什么。续聊：原块和上下文已经在历史里了，只补「现在长什么样」
+  const ctxText = noteContext(note, sectionTitle)
+  // 首轮：整篇稿子 + 原块 + 这次要干什么。续聊：稿子已经换过几版，重给现在这一版
   const opener = `${ctxText}
-当前块 ${block.id}（工具里要原样引用这个 id）：${blockLine(block)}
+稿子（整篇笔记现在的内容，块 id 以这里为准）：
+${draftOf(entries)}
+原块是标了（原块）的那一块 ${rootId}：${blockLine(block)}
 
 ${spec}`
   const follow = `这一轮现在的稿子（是你前面几轮改出来的成品；块 id 以这里为准，以前的已经作废）：
-${draftOf(ctx.plan)}
-原块还是：${blockLine(block)}
+${draftOf(ctx.entries)}
 
 这一轮要做的：${spec}`
 
@@ -466,7 +531,9 @@ ${draftOf(ctx.plan)}
         : preset?.mode || 'replace'
 
   return {
-    blocks: toBlocks(ctx, mode),
+    ops: opsOf(ctx.entries, note, rootId),
+    // 下一轮续聊要用的成品稿（还没落库的那一版），段落归属每轮按 heading 位置重算
+    blocks: toBlocks(ctx.entries),
     mode,
     say: stripMark(ctx.say),
     noticed: fellBack,

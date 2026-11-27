@@ -169,7 +169,7 @@ const run = async (preset) => {
     else if (total) stepChat(`这轮动了 ${total} 处（${tally}）。下面勾上要写的，然后接着说还要改什么。`, false)
     else stepChat('这轮没动东西 —— 换个说法，或者点上面的常用要求。', false)
     if (!total) say(r.reply ? '' : '这一轮没找到要动的地方，把要求说具体点再试', !r.reply)
-    else if (r.noticed) say('这次思考把输出额度吃光了，已自动关掉「深度思考」重跑一遍（本机这次请顺手把开关关掉，省得下次再撞）')
+    else if (r.noticed) say('这次思考把输出额度吃光了，已自动关掉「深度思考」重跑完 —— 下一轮想再开就重新勾上')
     else say('')
   } catch (e) {
     stepChat(`出错了：${String(e.message || e)}`, false)

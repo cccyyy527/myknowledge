@@ -310,6 +310,11 @@ export async function ping(cfg) {
   return text.trim()
 }
 
+// 历史里带 tool_calls 的 assistant 消息如果没带 reasoning_content，思考模式下再发一次
+// 会被 DeepSeek 直接 400 拒掉（比如上一轮思考被降级过、这轮用户又把开关打开）
+export const threadGap = (list = []) =>
+  list.some((m) => m?.role === 'assistant' && m.tool_calls?.length && !m.reasoning_content)
+
 // 带 tools 的流式请求：正文边收边显示，顺带把 tool_calls 拼起来
 export function chatStreamTools(
   messages,
@@ -331,7 +336,10 @@ export function chatStreamTools(
     list.some((m) => 'reasoning_content' in m)
       ? list.map(({ reasoning_content, ...rest }) => rest)
       : list
-  const once = (cc) => {
+  const once = (cc0) => {
+    // 线程里有补不回 reasoning_content 的 tool_calls 消息时，这一轮只能关着思考跑：
+    // 光不发 reasoning_content 没用，请求体里的 thinking 也得真的关掉，否则接口还是 400
+    const cc = threadGap(messages) && thinkOn(cc0) ? { ...cc0, thinking: 'off' } : cc0
     const on = thinkOn(cc)
     const mt = budgetOf(maxTokens, cc)
     const body = { messages: on ? messages : stripReasoning(messages), temperature, max_tokens: mt, stream: true }

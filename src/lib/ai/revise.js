@@ -511,6 +511,34 @@ function trimThread(list) {
   return [list[0], list[1], ...list.slice(cut)]
 }
 
+// 一轮跑完交给下一轮的线程：工具调用留下的 tool_calls / tool 消息里没有 reasoning_content，
+// 用户下次开着思考接着聊就会被 DeepSeek 400 拒掉。工具结果本身就是人话，压成一句接在
+// 模型的回答后面，线程就成了纯对话 —— 思考开关怎么切都不炸，模型照样知道自己动过哪块
+function settleThread(list) {
+  const out = []
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i]
+    if (m.role === 'tool') continue
+    if (m.role !== 'assistant') {
+      out.push({ ...m })
+      continue
+    }
+    if (!m.tool_calls?.length) {
+      out.push({ role: 'assistant', content: m.content })
+      continue
+    }
+    const acts = []
+    for (let j = i + 1; j < list.length && list[j].role === 'tool'; j++) {
+      const one = str(list[j].content).trim()
+      if (one) acts.push(one)
+    }
+    const said = str(m.content).trim()
+    const did = acts.length ? `（这轮我调了工具：${acts.join('；')}）` : ''
+    out.push({ role: 'assistant', content: [said, did].filter(Boolean).join('\n\n') || '（这轮没动）' })
+  }
+  return out
+}
+
 export async function reviseNote({
   note,
   instruction,
@@ -553,9 +581,9 @@ ${JSON.stringify(cur)}
 
 这一轮要做的：${want}`
 
-  // 有线程就沿用（真对话），没有就开一条新的
+  // 有线程就沿用（真对话），没有就开一条新的；旧线程里可能还留着工具消息，这里再拍平一遍
   const thread = arr(messages).length
-    ? [...messages.map((m) => ({ ...m })), { role: 'user', content: follow }]
+    ? [...settleThread(arr(messages)), { role: 'user', content: follow }]
     : [
         { role: 'system', content: reviseSystem(allowSplit, outside, thinkOn(conf)) },
         { role: 'user', content: intro },
@@ -626,7 +654,7 @@ ${JSON.stringify(cur)}
     title: stripMark(ctx.title),
     advice: ctx.advice,
     reply: ctx.reply,
-    messages: trimThread(thread),
+    messages: trimThread(settleThread(thread)),
     related: rel,
     ops: normalizeOps(planToOps(ctx), note),
     noticed: fellBack,

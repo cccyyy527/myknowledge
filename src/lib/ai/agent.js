@@ -4,7 +4,7 @@ import { liveNoteById } from '../store.js'
 import { searchNotes, noteText, noteIsEmpty, noteBrief } from '../retrieve.js'
 import { loadAI, isAiReady, thinkOn, chatStreamTools } from './client.js'
 import { SECTIONS, SECTION_SPEC, str, normalizeBlocks, stripMark, OUTSIDE_MARK, sectionDumpIssue } from './schema.js'
-import { planEdits } from './block-edit.js'
+import { planEdits, dupBlocks, dupIssue } from './block-edit.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { FILE_RULE } from './compose.js'
 import { trimHistory } from './ask.js'
@@ -118,7 +118,7 @@ export const TOOLS = [
             type: 'string',
             enum: ['exist', 'edit', 'new'],
             description:
-              'exist 往已有笔记对应小节末尾追加新块（默认选项：库里已有笔记能装下这次内容就用它）；edit 改已有笔记里具体的块（改写 / 删除 / 就地插入 / 补公式注解）；new 新建一篇（只有已有笔记的标题换不掉、或者这次是全新主题时才用，且必须填 nearNoteId 交代你放弃了哪篇）',
+              'exist 往已有笔记对应小节末尾追加新块（库里已有笔记能装下这次内容就用它；但这次要说的内容那篇里已经写了就别用它，见 edit）；edit 改已有笔记里具体的块（改写 / 删除 / 就地插入 / 把放错段的块挪回去）；new 新建一篇（只有已有笔记的标题换不掉、或者这次是全新主题时才用，且必须填 nearNoteId 交代你放弃了哪篇）',
           },
           noteId: {
             type: 'string',
@@ -149,16 +149,17 @@ export const TOOLS = [
           edits: {
             type: 'array',
             description:
-              'mode=edit 时的改动列表。块 id 取自 read_note 输出里的 [#块id]，不要自己编。旧的结论过时就用 replace 改写，写错了就用 remove 删，缺一句就用 insert 就地补。',
+              'mode=edit 时的改动列表。块 id 取自 read_note 输出里的 [#块id]，不要自己编。旧的结论过时就用 replace 改写，写错了就用 remove 删，缺一句就用 insert 就地补；这篇其实写过、只是段落放错了，用 move 把它挪回去——别在 exist 里再加一块一样的。',
             items: {
               type: 'object',
               properties: {
                 op: {
                   type: 'string',
-                  enum: ['replace', 'remove', 'insert'],
-                  description: 'replace 整块改写（要给全该块内容）；remove 删除该块；insert 在目标块后面插一块新的',
+                  enum: ['replace', 'remove', 'insert', 'move'],
+                  description:
+                    'replace 整块改写（要给全该块内容）；remove 删除该块；insert 在目标块后面插一块新的；move 只把该块挪到 section 指定的段落，内容一个字不改（不用给块内容）',
                 },
-                blockId: { type: 'string', description: 'op=replace / remove 时必填，目标是哪一块' },
+                blockId: { type: 'string', description: 'op=replace / remove / move 时必填，目标是哪一块' },
                 afterBlockId: { type: 'string', description: 'op=insert 时必填，插在这一块后面' },
                 why: { type: 'string', description: '一句话说明这块为什么要改，会展示给用户看' },
                 ...BLOCK_SCHEMA.properties,
@@ -288,6 +289,11 @@ function runTool(ctx, call) {
     }
     const oldNote = liveNoteById(str(args.noteId))
     const mode = args.mode === 'exist' && oldNote ? 'exist' : 'new'
+    // 这次要加的东西这篇里已经有了：正解是把那一块归位或改写，不是再抄一份
+    if (mode === 'exist') {
+      const dup = dupBlocks(oldNote, blocks)
+      if (dup.length) return { content: dupIssue(dup), summary: `🗂 打回：${dup.length} 块这篇已有` }
+    }
     const nearId = str(args.nearNoteId)
     const near = nearId ? liveNoteById(nearId) : null
 
@@ -454,7 +460,8 @@ const ARCHIVE_NUDGE = `把上面这轮问答存进知识库。落点怎么选，
 ${FILE_RULE}
 - 追加进已有笔记时，需要的话 read_note 看它已有的小节和块 id。
 - 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason，以及 blocks 或 edits。
-- 这轮回答如果是在纠正、补充、更新已有块里的说法，用 mode=edit：edits 里逐条写 op（replace 整块改写 / remove 删除 / insert 在目标块后就地插一块），blockId 取自 read_note 的 [#块id]，块内容要给全。
+- 这轮回答如果是在纠正、补充、更新已有块里的说法，用 mode=edit：edits 里逐条写 op（replace 整块改写 / remove 删除 / insert 在目标块后就地插一块 / move 只把块挪到对的段落），blockId 取自 read_note 的 [#块id]，块内容要给全（move 不用给）。
+- 追加之前先对照这篇已有的块：这次要说的事那篇里已经写了，只是段落放错 → mode=edit + op=move 归位；说法过时或要补一句 → op=replace 改那一块。库里已有的内容再追加一块，会被打回。
 - 纯粹是新内容才用 mode=exist 往小节末尾追加 blocks。
 - blocks 要按语义分块（paragraph / definition / formula / qa / pitfall / steps / comparison），别把整篇答案塞进一张问答卡。
 - 每块都带 section，按内容语义定，跟这次内容是从一个问答来的无关 —— 别因为用户「问了个问题」就把整条答案都标成 qa。只有真写成「面试官会这么问 + 我怎么答」的卡才放 qa；一句能站住的结论进 core，公式 / 前提 / 推导 / 对比进 detail。

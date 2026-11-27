@@ -983,6 +983,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .ask-edit-op.remove { background: #fdeceb; color: #b3261e; }
 .ask-edit-op.insert { background: #eaf4ec; color: #2e6b3a; }
+.ask-edit-op.move { background: #eef1fb; color: #3d4a8f; }
 .ask-edit-at, .ask-edit-why { font-size: 11px; line-height: 1.6; color: var(--ink-3); }
 .ask-edit-before {
   padding: 2px 8px; border-left: 2px solid var(--line); opacity: 0.62;

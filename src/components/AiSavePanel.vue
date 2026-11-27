@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { SECTIONS, stripMark } from '../lib/ai.js'
+import { SECTIONS, stripMark, secTitle } from '../lib/ai.js'
 import { state, liveNotes, liveNoteById, flattenTopics, topicPath } from '../lib/store.js'
 import { attachRefs, groupBySection, plainBlocks } from '../lib/draft.js'
 import BlockView from './BlockView.vue'
@@ -37,10 +37,13 @@ const editPlan = computed(() => {
     before: e.before,
     after: e.after,
     afterTitle: e.op === 'insert' ? labelOf(s.noteId, e.afterBlockId) : '',
+    // 归位不涉内容，只交代「从哪段到哪段」
+    moveFrom: e.op === 'move' ? secTitle(e.from || e.before?.section) : '',
+    moveTo: e.op === 'move' ? secTitle(e.to || e.after?.section) : '',
   }))
 })
 
-const OP_TEXT = { replace: '改写', remove: '删除', insert: '就地插入' }
+const OP_TEXT = { replace: '改写', remove: '删除', insert: '就地插入', move: '挪段' }
 
 // 逐条勾选：默认全选，勾掉的这次不会写进笔记
 const kept = (i) => !(props.saving.offEdits || []).includes(i)
@@ -145,14 +148,24 @@ const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
               <span class="ask-edit-op" :class="e.op">{{ OP_TEXT[e.op] || e.op }}</span>
             </label>
             <span v-if="e.afterTitle" class="ask-edit-at">插在「{{ e.afterTitle }}」后面</span>
+            <span v-if="e.op === 'move'" class="ask-edit-at">
+              从「{{ e.moveFrom || '别处' }}」挪到「{{ e.moveTo }}」
+            </span>
             <span v-if="e.why" class="ask-edit-why">{{ e.why }}</span>
           </div>
-          <div v-if="e.before" class="ask-edit-before" :class="{ gone: e.op === 'remove' }">
-            <BlockView :block="e.before" expand />
-          </div>
-          <div v-if="e.after" class="ask-edit-after">
-            <BlockView :block="e.after" expand @open-note="openCite" />
-          </div>
+          <template v-if="e.op === 'move'">
+            <div class="ask-edit-after">
+              <BlockView :block="e.after" expand />
+            </div>
+          </template>
+          <template v-else>
+            <div v-if="e.before" class="ask-edit-before" :class="{ gone: e.op === 'remove' }">
+              <BlockView :block="e.before" expand />
+            </div>
+            <div v-if="e.after" class="ask-edit-after">
+              <BlockView :block="e.after" expand @open-note="openCite" />
+            </div>
+          </template>
         </div>
       </div>
     </template>

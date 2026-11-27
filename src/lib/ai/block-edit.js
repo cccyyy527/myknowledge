@@ -40,6 +40,38 @@ function blockFromPatch(raw, old, isNew) {
   return nb ? { ...nb, id } : null
 }
 
+// 段落以 heading 为界（和 entriesOf / revise.js 同一套判法）；标题被手动改过就按第几个 heading 兜底
+function secRanges(blocks) {
+  const heads = []
+  blocks.forEach((b, i) => {
+    if (b.type === 'heading' && (b.level || 2) === 2) heads.push({ at: i, text: str(b.text) })
+  })
+  return heads.map((h, nth) => ({
+    id: SEC_IDS.find((x) => secTitle(x) === h.text) || SEC_IDS[Math.min(nth, SEC_IDS.length - 1)],
+    start: h.at,
+    end: heads[nth + 1] ? heads[nth + 1].at : blocks.length,
+  }))
+}
+
+const sectionAt = (blocks, index) => {
+  const hit = secRanges(blocks).find((r) => index >= r.start && index < r.end)
+  return hit ? hit.id : ''
+}
+
+// 归位：把一块挪到目标段落末尾。笔记是按 heading 顺序渲染的，只改 section 字段不算挪，
+// 必须把块在数组里真的搬过去
+function relocate(blocks, blockId, section) {
+  const at = blocks.findIndex((b) => b.id === blockId)
+  if (at < 0) return null
+  const old = blocks[at]
+  const moved = { ...old, section }
+  blocks.splice(at, 1)
+  const range = secRanges(blocks).find((r) => r.id === section)
+  if (!range) blocks.push({ id: bid(), type: 'heading', level: 2, text: secTitle(section) }, moved)
+  else blocks.splice(range.end, 0, moved)
+  return { old, moved }
+}
+
 // 算出改动后的块数组，原笔记不动；改不动的写进 skipped 让模型/用户知道
 export function planEdits(note, edits) {
   const blocks = (note.blocks || []).map((b) => ({ ...b }))
@@ -47,7 +79,7 @@ export function planEdits(note, edits) {
   const skipped = []
   for (const raw of arr(edits)) {
     if (!raw || typeof raw !== 'object') continue
-    const op = raw.op === 'insert' ? 'insert' : raw.op === 'remove' ? 'remove' : 'replace'
+    const op = ['insert', 'remove', 'move'].includes(raw.op) ? raw.op : 'replace'
     const targetId = str(op === 'insert' ? raw.afterBlockId : raw.blockId)
     const at = blocks.findIndex((b) => b.id === targetId)
     if (at < 0) {
@@ -58,6 +90,21 @@ export function planEdits(note, edits) {
     if (op === 'remove') {
       blocks.splice(at, 1)
       changed.push({ op, blockId: old.id, before: old, after: null, why: str(raw.why) })
+      continue
+    }
+    // 只换段落：内容一个字不动，把整块搬到目标段
+    if (op === 'move') {
+      const to = secOk(raw.section)
+      if (!to) {
+        skipped.push({ op, id: targetId, why: 'move 要说清挪到哪一节（section 必填）' })
+        continue
+      }
+      if (sectionAt(blocks, at) === to) {
+        skipped.push({ op, id: targetId, why: `本来就在「${secTitle(to)}」` })
+        continue
+      }
+      const { old: before, moved } = relocate(blocks, targetId, to)
+      changed.push({ op: 'move', blockId: before.id, before, after: moved, why: str(raw.why) })
       continue
     }
     const nb = blockFromPatch(raw, old, op === 'insert')
@@ -72,7 +119,11 @@ export function planEdits(note, edits) {
     }
     const same = JSON.stringify(stripSection(old)) === JSON.stringify(stripSection(nb))
     if (same) {
-      skipped.push({ op, id: targetId, why: '和原来一样，没改动' })
+      // 内容没变、只有 section 变了：模型想表达的就是「归位」，别当成没改动丢掉
+      if (nb.section !== old.section) {
+        const { old: before, moved } = relocate(blocks, targetId, nb.section)
+        changed.push({ op: 'move', blockId: before.id, before, after: moved, why: str(raw.why) })
+      } else skipped.push({ op, id: targetId, why: '和原来一样，没改动' })
       continue
     }
     blocks[at] = nb
@@ -91,12 +142,94 @@ export function applyChanges(note, changes) {
     } else if (c.op === 'insert') {
       const at = blocks.findIndex((b) => b.id === c.afterBlockId)
       if (at >= 0) blocks.splice(at + 1, 0, { ...c.after })
+    } else if (c.op === 'move') {
+      const to = c.after?.section
+      if (to) relocate(blocks, c.blockId, to)
     } else {
       const at = blocks.findIndex((b) => b.id === c.blockId)
       if (at >= 0) blocks[at] = { ...c.after }
     }
   }
   return blocks
+}
+
+/* ---------- 追加之前先去重：这篇已有的块该归位 / 该改写，不该再抄一份 ---------- */
+
+// 只留文字和数字，标点空白全去掉：同一句话换个标点不算新内容
+const plainText = (v) => str(v).replace(/[\s\u3000\u00b7:：,，。、/|()（）[\]【】<>《》\-——"'“”‘’!！?？;；]/g, '')
+
+const flatOf = (b) =>
+  plainText(
+    [
+      b.text,
+      b.term,
+      b.question,
+      b.answer,
+      b.latex,
+      b.detail,
+      b.cause,
+      b.avoid,
+      (b.items || []).join(''),
+      (b.rows || []).map((r) => `${r.k}${r.a}${r.b}`).join(''),
+    ]
+      .filter(Boolean)
+      .join(''),
+  )
+
+const bigrams = (s) => {
+  const set = new Set()
+  for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2))
+  return set
+}
+
+// 同一段话说两遍：短块要求一字不差，长块容许措辞差别。
+// 八字以下不比相似度，免得「方差」和「方差缩减」被当成同一句
+export function alikeBody(a, b) {
+  if (!a || !b) return false
+  if (a === b) return true
+  const short = a.length <= b.length ? a : b
+  const long = a.length <= b.length ? b : a
+  if (short.length < 8) return false
+  const A = bigrams(short)
+  const B = bigrams(long)
+  let hit = 0
+  for (const g of A) if (B.has(g)) hit++
+  return hit / A.size >= 0.8
+}
+
+const sectionOfId = (blocks, id) => {
+  const at = blocks.findIndex((b) => b.id === id)
+  return at < 0 ? '' : sectionAt(blocks, at)
+}
+
+const labelOf = (b) => {
+  const raw = str(b.text || b.term || b.question || b.answer || b.latex || (b.items || [])[0] || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return raw.length > 18 ? `${raw.slice(0, 18)}…` : raw
+}
+
+// 这次要加的块里，哪些和这篇已有的块（或本次已收的块）讲的是同一件事
+export function dupBlocks(note, blocks, skipIds = []) {
+  const pool = (note?.blocks || []).filter((b) => b.type !== 'heading' && !skipIds.includes(b.id))
+  const hits = []
+  for (const b of arr(blocks)) {
+    const t = flatOf(b)
+    if (!t) continue
+    const old = pool.find((e) => alikeBody(t, flatOf(e)))
+    if (old) hits.push({ block: b, old, section: sectionOfId(note.blocks, old.id) })
+    else pool.push(b)
+  }
+  return hits
+}
+
+export function dupIssue(hits) {
+  const rows = hits.map(({ block, old, section }) => {
+    const where = section ? `「${secTitle(section)}」` : '这篇'
+    const was = labelOf(old)
+    return `- 想加的「${labelOf(block)}」＝ ${where}里的 [#${old.id}]${was ? `「${was}」` : ''}`
+  })
+  return `这篇已经有这些内容了，再加就是同一段话说两遍：\n${rows.join('\n')}\n改成 mode=edit，把动作落在已有那块上：段落放错了就用 op=move（blockId 填 [#] 里的 id、section 填该去的那段，内容不用重给）；说法过时或要补一句就用 op=replace（blockId 同上，给全改完的整块内容）。这篇确实没写过的内容才用 mode=exist 追加。`
 }
 
 /* ---------- L1：改一个块 ---------- */

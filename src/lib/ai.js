@@ -4,6 +4,7 @@
 export * from './ai/client.js'
 export * from './ai/topics.js'
 export * from './ai/schema.js'
+export * from './ai/prompts.js'
 export * from './ai/block-edit.js'
 export * from './ai/compose.js'
 export * from './ai/ask.js'

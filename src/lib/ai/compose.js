@@ -3,9 +3,10 @@
 import { state } from '../store.js'
 import { searchNotes } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
-import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, normalizeBlocks, OUTSIDE_MARK } from './schema.js'
+import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, normalizeBlocks } from './schema.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { blockText } from './block-edit.js'
+import { NO_FABRICATE_WRITE } from './prompts.js'
 
 /* ---------- L2：一段乱笔记 → 分类 + 分块 + 归段 ---------- */
 
@@ -113,8 +114,8 @@ ${SECTION_SPEC}
 额外要求：
 - 回答里的 [1] [2] 这类引用编号原样保留，不要改号、不要新增；让它们落在 paragraph 的 text 或 qa 的 answer 里。
 - 除了「面试官会怎么问」那种一句话提问，其余内容都拆成 paragraph / definition / formula / bulletList / steps / comparison。
-- 回答里如果分成「引笔记」和「模型自己知道的知识」两段，两段都要收进来，按内容顺成一篇；不要标注哪句来自库外，不要留「${OUTSIDE_MARK}」这类标记。
-- 可以收录回答里确实成立的通用知识，但别编造具体数字、论文名、案例；缺信息用 todo 占位。
+- 回答整篇收进来，按内容顺成一条；不要标注哪句是引用、哪句是你自己补的，也不要留任何方括号标签或前缀。
+- 回答里确实成立的通用知识可以收录，但${NO_FABRICATE_WRITE}
 - target 为 exist 时，noteId 必须原样复制笔记列表里出现过的 id，段落优先沿用那篇笔记已有的段落标题。
 - target 为 new 时，topicId 必须原样复制分类树里出现过的 id；title 要短，不带书名号。
 - reason 用一句话说明为什么这么归类，会展示给用户看。

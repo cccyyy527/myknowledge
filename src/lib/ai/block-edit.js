@@ -2,6 +2,7 @@
 
 import { chat, pickJson } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, bid, VALID, normalizeBlocks, stripSection, stripMark } from './schema.js'
+import { NO_FABRICATE_WRITE } from './prompts.js'
 
 /* ---------- 改已有块：按块 id 改写 / 删除 / 就地插入 ---------- */
 
@@ -119,7 +120,7 @@ const CUSTOM_SPEC = (ask) => `用户对这个块说的话：${ask}
 按他这句话处理这个块：
 - 如果是在提问（问机制、问区别、问「面试官追问怎么答」）：正面回答，再把回答整理成知识块 —— 结论和机制用 paragraph，问法与答法用 qa，易错点用 pitfall，对比用 comparison。这种情况原块不动，mode 用 insert。
 - 如果是在要求改写（写短点、加推导、换个说法、补对比）：按他要求的范围重写原块，mode 用 replace。
-- 不要编造具体数字、论文名、公司案例；拿不准的数字用「通常 / 一般」这种说法，或者用 todo 块占位。
+- ${NO_FABRICATE_WRITE}
 只输出一个 JSON 对象：{"mode":"insert|replace","blocks":[{"type":"...","section":"...",...}]}`
 
 export async function rewriteBlock({ action, ask = '', block, note, sectionTitle, cfg }) {

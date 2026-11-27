@@ -3,6 +3,7 @@
 import { newBlockId } from '../store.js'
 import { chat, pickJson } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks, assembleBlocks } from './schema.js'
+import { NO_FABRICATE_WRITE } from './prompts.js'
 
 /* ---------- 整篇改写：把笔记当一份稿子重排 ---------- */
 
@@ -36,7 +37,7 @@ ${SECTION_SPEC}
   drop    删掉已有块，只需给 id
 - block 里放块字段（type + BLOCK_SPEC 里对应的字段），section 放在 op 这一层。
 - 指令没提到的块一律 keep，不要顺手润色、不要改变顺序。
-- 不要编造具体数字、论文名、公司案例；缺信息就写 todo 块占位。
+- ${NO_FABRICATE_WRITE}
 - 不要输出 heading 块，段落由 section 字段决定。
 - title 只在指令明确要求改标题时才给，否则省略这个字段。
 只输出一个 JSON 对象：{"title":"...","ops":[{"op":"keep","id":"..."},{"op":"add","section":"core","block":{"type":"paragraph","text":"..."}}]}`

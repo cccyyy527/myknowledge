@@ -223,8 +223,13 @@ const saveExtra = () => {
           <span>API Key</span>
           <input v-model.trim="cfg.key" type="password" placeholder="sk-..." />
         </label>
+        <label class="ai-row">
+          <span>思考模式</span>
+          <input v-model="cfg.thinking" type="checkbox" true-value="on" false-value="off" />
+        </label>
 
         <p class="ai-hint">
+          DeepSeek 默认会先长篇思考再回答，写笔记时又慢又贵，所以默认关掉；只有难题才值得勾上。
           常用组合：DeepSeek 用 <code>https://api.deepseek.com</code> + <code>deepseek-flash</code>（便宜，够用），
           要更强的推理换 <code>deepseek-v4-pro</code>（约贵 4 倍）；OpenAI 用
           <code>https://api.openai.com/v1</code> + <code>gpt-4o-mini</code>。地址结尾会自动补

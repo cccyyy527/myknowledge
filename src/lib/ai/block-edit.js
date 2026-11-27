@@ -1,6 +1,6 @@
 // 改块：单个块的润色 / 扩写 / 拆块，以及按块 id 改写整篇里的若干块
 
-import { chat, pickJson } from './client.js'
+import { chat, pickJson, trimThread } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, bid, VALID, normalizeBlocks, stripSection, stripMark } from './schema.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
 
@@ -138,33 +138,90 @@ const CUSTOM_SPEC = (ask) => `用户对这个块说的话：${ask}
 按他这句话处理这个块：
 - 如果是在提问（问机制、问区别、问「面试官追问怎么答」）：正面回答，再把回答整理成知识块 —— 结论和机制用 paragraph，问法与答法用 qa，易错点用 pitfall，对比用 comparison。这种情况原块不动，mode 用 insert。
 - 如果是在要求改写（写短点、加推导、换个说法、补对比）：按他要求的范围重写原块，mode 用 replace。
-- ${NO_FABRICATE_WRITE}
-只输出一个 JSON 对象：{"mode":"insert|replace","blocks":[{"type":"...","section":"...",...}]}`
+- ${NO_FABRICATE_WRITE}`
 
-export async function rewriteBlock({ action, ask = '', block, note, sectionTitle, cfg }) {
-  const custom = String(ask || '').trim()
-  const spec = custom ? CUSTOM_SPEC(custom) : ACTION_PROMPT[action]
-  if (!spec) throw new Error('未知的 AI 动作')
-  const mode = custom ? 'insert' : AI_ACTIONS.find((a) => a.id === action)?.mode || 'replace'
-  const system = `你在改一篇数据分析面试知识笔记里的一个块。用户可能让你润色、扩写、拆块，也可能直接问你关于这个块的问题；你产出的内容会写进这篇笔记。
+// 单个块的改动一般三五轮就说完，太长没必要；前两条（system + 开场上下文）常驻
+const MAX_BLOCK_THREAD = 15
+
+const BLOCK_SYSTEM = `你在帮用户改一篇数据分析面试知识笔记里的一个块，是连续对话：用户会一轮轮提要求，你能看到自己前面几轮改出来的稿子，可以接着改、也可以只回答他的问题。你产出的内容最后会写进这篇笔记。
 ${BLOCK_SPEC}
 ${SECTION_SPEC}
 
+每轮只输出一个 JSON 对象（不要代码块、不要多余的解释文字）：
+{"say":"…","mode":"insert|replace","blocks":[{"type":"…","section":"…",…}]}
+- say：用中文写给用户看的一句话，说清这轮做了什么或答了什么（≤60 字），像人说话，别复述 JSON、别提字段名。
+- mode=replace 表示 blocks 替换掉原来这一块；mode=insert 表示原来这一块不动、blocks 插在它后面。`
+
+// 「现在这一块长什么样」：把块摊成一行给模型看，省 token
+const blockLine = (b) => `[${b.type}] ${blockText(b)}`
+
+// 续聊时把上一轮的成品带上：用户要的可能只是「再短一点」，模型得知道在改什么
+const draftOf = (blocks) =>
+  JSON.stringify(arr(blocks).map(({ id, ...rest }) => rest), null, 1)
+
+export async function rewriteBlock({
+  action,
+  ask = '',
+  block,
+  note,
+  sectionTitle,
+  cfg,
+  messages,
+  blocks,
+  mode: prevMode = '',
+  onNoThinking,
+}) {
+  if (!block) throw new Error('没有要改的块')
+  const custom = String(ask || '').trim()
+  const preset = AI_ACTIONS.find((a) => a.id === action)
+  const spec = custom ? CUSTOM_SPEC(custom) : ACTION_PROMPT[action]
+  if (!spec) throw new Error('未知的 AI 动作')
+  const hist = arr(messages)
+  const live = arr(blocks).length ? arr(blocks) : [{ ...block }]
+  const ctx = noteContext(note, sectionTitle, block)
+
+  // 首轮：整篇上下文 + 原块 + 这次要干什么。续聊：原块和上下文已经在历史里了，只补「现在长什么样」
+  const opener = `${ctx}
+当前块：${blockLine(block)}
+
 ${spec}`
+  const follow = `这一轮现在的稿子（是你前面几轮改出来的成品，${prevMode === 'insert' ? '插在原块后面、原块不动' : '用来替换原块'}）：
+${draftOf(live)}
+原块还是：${blockLine(block)}
 
-  const user = `${noteContext(note, sectionTitle, block)}
-当前块：[${block.type}] ${blockText(block)}`
+这一轮要做的：${spec}`
 
-  const text = await chat(
-    [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    { cfg, temperature: custom ? 0.3 : 0.4, maxTokens: 2500 },
-  )
+  const thread = hist.length
+    ? [...hist, { role: 'user', content: follow }]
+    : [
+        { role: 'system', content: BLOCK_SYSTEM },
+        { role: 'user', content: opener },
+      ]
+
+  const text = await chat(thread, {
+    cfg,
+    temperature: custom ? 0.3 : 0.4,
+    maxTokens: 2500,
+    onNoThinking,
+  })
   const data = pickJson(text)
-  const blocks = normalizeBlocks(data.blocks)
-  if (!blocks.length) throw new Error('模型没给出可用内容，换个说法再试')
-  // 提问是补内容，别把原块冲掉；除非模型明确说这次是改写
-  return { blocks, mode: custom ? (data.mode === 'replace' ? 'replace' : 'insert') : mode }
+  const out = normalizeBlocks(data.blocks)
+  if (!out.length) throw new Error('模型没给出可用内容，换个说法再试')
+  // insert 还是 replace 在一段对话里保持稳定：中途换掉会把原块冲掉。
+  // 首轮按「点的是哪个按钮」定；自己说话那种，提问默认补内容，模型明确说要改才替换
+  const mode =
+    prevMode === 'insert' || prevMode === 'replace'
+      ? prevMode
+      : custom
+        ? data.mode === 'replace'
+          ? 'replace'
+          : 'insert'
+        : preset?.mode || 'replace'
+
+  return {
+    blocks: out,
+    mode,
+    say: stripMark(data.say),
+    messages: trimThread([...thread, { role: 'assistant', content: text }], MAX_BLOCK_THREAD),
+  }
 }

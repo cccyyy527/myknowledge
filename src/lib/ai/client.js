@@ -315,6 +315,15 @@ export async function ping(cfg) {
 export const threadGap = (list = []) =>
   list.some((m) => m?.role === 'assistant' && m.tool_calls?.length && !m.reasoning_content)
 
+// 对话线程别无限长：超过 max 条就从最早的一轮用户消息处切。
+// 前两条（system + 第一轮的开场上下文）永远留着，否则模型会忘了自己在改什么
+export function trimThread(list, max) {
+  if (list.length <= max) return list
+  let cut = list.length - (max - 2)
+  while (cut < list.length - 1 && list[cut].role !== 'user') cut++
+  return [list[0], list[1], ...list.slice(cut)]
+}
+
 // 带 tools 的流式请求：正文边收边显示，顺带把 tool_calls 拼起来
 export function chatStreamTools(
   messages,

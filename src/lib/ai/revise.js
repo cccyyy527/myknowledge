@@ -2,7 +2,7 @@
 
 import { newBlockId, liveNoteById } from '../store.js'
 import { searchNotes, blockText } from '../retrieve.js'
-import { chatStreamTools, loadAI, thinkOn } from './client.js'
+import { chatStreamTools, loadAI, thinkOn, trimThread } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, VALID, str, arr, normalizeBlocks, assembleBlocks, stripMark } from './schema.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
@@ -504,13 +504,6 @@ const planToOps = (ctx) => [
 // 对话线程别无限长：超过这么多条就从最早的一轮用户消息处切（system + 开场快照永远留着）
 const MAX_THREAD = 26
 
-function trimThread(list) {
-  if (list.length <= MAX_THREAD) return list
-  let cut = list.length - (MAX_THREAD - 2)
-  while (cut < list.length - 1 && list[cut].role !== 'user') cut++
-  return [list[0], list[1], ...list.slice(cut)]
-}
-
 // 一轮跑完交给下一轮的线程：工具调用留下的 tool_calls / tool 消息里没有 reasoning_content，
 // 用户下次开着思考接着聊就会被 DeepSeek 400 拒掉。工具结果本身就是人话，压成一句接在
 // 模型的回答后面，线程就成了纯对话 —— 思考开关怎么切都不炸，模型照样知道自己动过哪块
@@ -654,7 +647,7 @@ ${JSON.stringify(cur)}
     title: stripMark(ctx.title),
     advice: ctx.advice,
     reply: ctx.reply,
-    messages: trimThread(settleThread(thread)),
+    messages: trimThread(settleThread(thread), MAX_THREAD),
     related: rel,
     ops: normalizeOps(planToOps(ctx), note),
     noticed: fellBack,

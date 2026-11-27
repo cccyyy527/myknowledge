@@ -12,6 +12,9 @@ import {
 import {
   loadAI,
   isAiReady,
+  planCross,
+  commitCross,
+  undoCross,
   mergeNotes,
   auditNotes,
   reviseNotes,
@@ -37,11 +40,14 @@ const cfg = ref(loadAI())
 const think = ref(loadAI().thinking === 'on')
 const q = ref('')
 const ids = ref([])
+const ask = ref('')
 const extra = ref('')
 const busy = ref('')
 const msg = ref('')
 const bad = ref(false)
 
+const plan = ref(null) // 提问结果：一段回答 + 一份能点的清单
+const planUndo = ref(null) // 上次执行清单的撤销快照
 const merged = ref(null) // 整合结果：新笔记草案
 const audit = ref(null) // 一致性结果
 const revises = ref([]) // 逐篇重构结果
@@ -49,7 +55,7 @@ const undoStack = ref([]) // 上次写入的撤销快照
 
 const ready = computed(() => isAiReady(cfg.value))
 const spinLabel = computed(
-  () => ({ audit: '核对中', revise: '逐篇处理中', merge: '整合中' })[busy.value] || '处理中',
+  () => ({ ask: '看这几篇', audit: '核对中', revise: '逐篇处理中', merge: '整合中' })[busy.value] || '处理中',
 )
 
 // 开关只覆盖这一次请求的 thinking，不动设置里的默认值
@@ -68,7 +74,10 @@ watch(
     think.value = cfg.value.thinking === 'on'
     q.value = ''
     ids.value = []
+    ask.value = ''
     extra.value = ''
+    plan.value = null
+    planUndo.value = null
     merged.value = null
     audit.value = null
     revises.value = []
@@ -134,6 +143,71 @@ const toggleBlock = (id) => {
   else off.value.push(id)
 }
 
+/* ---------- 提问：一句话问这几篇，回来的是一份能点的清单 ---------- */
+
+const ASKS = [
+  '这几篇之间有没有说法对不上的？',
+  '有没有讲同一件事、该并掉的？',
+  '有没有拆得不清、该拆成两篇的？',
+  '每篇都需要留着吗？',
+]
+
+const PLAN_TEXT = {
+  move: '归位',
+  merge: '合并',
+  reword: '改写',
+  drop: '删除',
+  fold: '并篇',
+  split: '拆篇',
+  keep: '保留',
+}
+
+const runAsk = async () => {
+  if (!ids.value.length) return say('先勾一篇以上', true)
+  if (!ask.value.trim()) return say('先写一句你要问的', true)
+  if (!ready.value) return say('还没配 API Key，去「设置」填一下', true)
+  busy.value = 'ask'
+  plan.value = null
+  planUndo.value = null
+  merged.value = null
+  audit.value = null
+  revises.value = []
+  say('')
+  try {
+    const r = await planCross({ ids: ids.value, question: ask.value, cfg: reqCfg() })
+    plan.value = r
+    if (!r.answer) say('模型没给回答，换个问法再试', true)
+    else if (!r.items.length) say('这几篇没查出要动的地方')
+  } catch (e) {
+    say(String(e.message || e), true)
+  } finally {
+    busy.value = ''
+  }
+}
+
+const planCount = computed(() =>
+  plan.value ? plan.value.items.filter((it) => it.checked && it.op !== 'keep').length : 0,
+)
+
+const applyPlan = () => {
+  if (!planCount.value) return say('一项都没勾，没什么可做的', true)
+  const undo = commitCross(plan.value.items)
+  planUndo.value = undo
+  plan.value = null
+  const parts = []
+  if (undo.notes.length) parts.push(`改了 ${undo.notes.length} 篇`)
+  if (undo.made.length) parts.push(`拆出 ${undo.made.length} 篇新笔记`)
+  if (undo.restored.length) parts.push(`${undo.restored.length} 篇并进别篇、已进回收站`)
+  say(parts.length ? `${parts.join('，')}。不满意可以撤销。` : '这几条实际没什么可改的')
+}
+
+const undoPlan = () => {
+  if (!planUndo.value) return
+  undoCross(planUndo.value)
+  planUndo.value = null
+  say('已撤销，笔记回到改之前的样子')
+}
+
 const runMerge = async () => {
   if (ids.value.length < 2) return say('先勾两篇以上', true)
   if (!ready.value) return say('还没配 API Key，去「设置」填一下', true)
@@ -195,7 +269,7 @@ const write = () => {
 /* ---------- 逐篇原地重构 ---------- */
 
 const OPS = { move: '归档', replace: '改写', add: '新增', drop: '删除', split: '拆出' }
-const secName = (id) => (SECTIONS.find((s) => s.id === id) || {}).name || id || '原地'
+const secName = (id) => (SECTIONS.find((s) => s.id === id) || {}).title || id || '原地'
 const clip = (t, n = 64) => {
   const s = String(t || '').replace(/\s+/g, ' ').trim()
   return s.length > n ? s.slice(0, n) + '…' : s
@@ -218,6 +292,21 @@ const opText = (o) => {
   const now = clip(blockText(o.block))
   const old = o.op === 'replace' ? clip(blockText(o.old), 36) : ''
   return old ? `${old} → ${now}` : now
+}
+
+// 清单每条写清「动哪一块、动成什么样」，别让人靠猜
+const planText = (it) => {
+  const body = clip(blockText(it.block), 52)
+  if (it.op === 'move') return `「${body}」→ ${secName(it.to)}`
+  if (it.op === 'merge') {
+    const keep = clip(blockText(it.otherBlock), 40)
+    return `留「${keep}」（${it.otherNoteTitle} · ${secName(it.otherSection)}），删掉这条「${body}」`
+  }
+  if (it.op === 'reword') return `「${body}」→「${clip(blockText(it.next), 52)}」`
+  if (it.op === 'drop') return `删掉「${body}」`
+  if (it.op === 'fold') return `《${it.fromTitle}》并进《${it.noteTitle}》，前者进回收站`
+  if (it.op === 'split') return `《${it.noteTitle}》里 ${it.blockIds.length} 块拆成《${it.title}》`
+  return ''
 }
 
 const runRevise = async () => {
@@ -274,7 +363,7 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
 <template>
   <div class="ai-cross">
     <p class="ai-tip">
-      勾 2~6 篇，让 AI 横向看一遍。三种用法：<strong>整合</strong>只生成一篇新的，原来那几篇一块都不动；<strong>逐篇处理</strong>是原地改这几篇（该精简的精简、该拆的拆成新篇，原篇 id 和反链都不变，写完能撤销）；<strong>查一致性</strong>纯只读，什么都不写。
+      勾几篇（最多 6 篇），直接问它们一句话：<strong>哪里对不上、哪里讲重了、哪篇该拆、哪篇该并</strong>。AI 先给结论，再给一张能点的清单——归位、合并、改写、删块、拆篇、并篇，你勾哪条它才做哪条，做完能撤销。
     </p>
 
     <div class="xg-search-row">
@@ -309,30 +398,93 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
     </div>
 
     <textarea
-      v-model="extra"
+      v-model="ask"
       class="ai-area"
       rows="2"
-      placeholder="额外要求（选填）：例，合成一篇《实验平台设计》；或，每篇只留结论，推导过程删掉；或，讲两件事的拆成两篇"
+      placeholder="直接问，例：这两篇讲的是不是一回事？有没有说法对不上的？哪篇该拆？"
+      @keydown.ctrl.enter="runAsk"
     />
 
+    <div class="xg-ask-tags">
+      <button v-for="s in ASKS" :key="s" class="xg-chip" @click="ask = s">{{ s }}</button>
+    </div>
+
     <div class="ai-acts">
-      <button class="ai-primary" :disabled="!!busy || ids.length < 2" @click="runMerge">
-        {{ busy === 'merge' ? '整合中…' : '✨ 整合成一篇新笔记' }}
-      </button>
-      <button :disabled="!!busy || ids.length < 2" @click="runRevise">
-        {{ busy === 'revise' ? '逐篇处理中…' : '✍️ 逐篇原地重构' }}
-      </button>
-      <button :disabled="!!busy || ids.length < 2" @click="runAudit">
-        {{ busy === 'audit' ? '核对中…' : '查一致性（只读）' }}
+      <button class="ai-primary" :disabled="!!busy || !ids.length" @click="runAsk">
+        {{ busy === 'ask' ? '看这几篇…' : '🔍 问这几篇' }}
       </button>
       <AiSpin :active="!!busy" :label="spinLabel" />
       <AiThink
         v-model="think"
-        hint="整合、逐篇重构、一致性检查都属于想清楚再答的活，开一次试试；会慢一些、费 token 多一点"
+        hint="横向读几篇、还要判断该合并还是该拆，属于想清楚再答的活；开一次试试，会慢一些、费 token 多一点"
       />
     </div>
 
     <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
+
+    <!-- 提问结果：先是一段回答，再是一张能点的清单 -->
+    <template v-if="plan">
+      <div class="xg-answer">
+        <p class="xg-answer-title">这 {{ plan.notes.length }} 篇看下来</p>
+        <p class="xg-answer-body">{{ plan.answer }}</p>
+      </div>
+
+      <template v-if="plan.items.length">
+        <p class="ai-hint">
+          <strong>勾哪条我做哪条</strong>，不勾就原样留着。删除、并篇、拆篇默认不勾——抹内容、开新篇都是大动作，自己点一下。
+        </p>
+        <div class="xg-plan">
+          <label v-for="it in plan.items" :key="it.key" class="xg-plan-row" :class="{ off: !it.checked }">
+            <input v-if="it.op !== 'keep'" v-model="it.checked" type="checkbox" />
+            <span v-else class="xg-plan-dot">·</span>
+            <span class="xg-op-tag" :class="'op-' + it.op">{{ PLAN_TEXT[it.op] }}</span>
+            <span class="xg-plan-main">
+              <span class="xg-plan-text">
+                <template v-if="it.op === 'keep'">《{{ it.noteTitle }}》留着，不用动</template>
+                <template v-else-if="it.op !== 'fold' && it.op !== 'split'">
+                  <span class="xg-plan-where">{{ it.noteTitle }} · {{ secName(it.section) }}</span>
+                  {{ planText(it) }}
+                </template>
+                <template v-else>{{ planText(it) }}</template>
+              </span>
+              <span v-if="it.why" class="xg-plan-why">{{ it.why }}</span>
+            </span>
+          </label>
+        </div>
+        <div class="ai-acts">
+          <button class="ai-primary" :disabled="!planCount" @click="applyPlan">
+            写入勾选的 {{ planCount }} 处
+          </button>
+          <button @click="plan = null">放弃</button>
+        </div>
+      </template>
+    </template>
+
+    <div v-if="planUndo" class="ai-acts">
+      <button @click="undoPlan">↩︎ 撤销这次写入（回到改之前）</button>
+    </div>
+
+    <!-- 老的三条路径收进这里，不占主动作的位置 -->
+    <details class="xg-manual">
+      <summary>手动模式：整合成新篇 / 逐篇原地重构 / 查一致性（只读）</summary>
+      <textarea
+        v-model="extra"
+        class="ai-area"
+        rows="2"
+        placeholder="额外要求（选填）：例，合成一篇《实验平台设计》；或，每篇只留结论，推导过程删掉；或，讲两件事的拆成两篇"
+      />
+      <div class="ai-acts">
+        <button :disabled="!!busy || ids.length < 2" @click="runMerge">
+          {{ busy === 'merge' ? '整合中…' : '✨ 整合成一篇新笔记' }}
+        </button>
+        <button :disabled="!!busy || ids.length < 2" @click="runRevise">
+          {{ busy === 'revise' ? '逐篇处理中…' : '✍️ 逐篇原地重构' }}
+        </button>
+        <button :disabled="!!busy || ids.length < 2" @click="runAudit">
+          {{ busy === 'audit' ? '核对中…' : '查一致性（只读）' }}
+        </button>
+      </div>
+    </details>
 
     <div v-if="undoStack.length" class="ai-acts">
       <button @click="undoLast">↩︎ 撤销这次写入（回到改之前）</button>

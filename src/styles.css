@@ -1218,8 +1218,49 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .xg-op-tag.op-move { background: #eef0fb; color: #3f4a9c; }
 .xg-op-tag.op-drop { background: #fdeaea; color: #b42318; }
 .xg-op-tag.op-split { background: #fdf1e3; color: #97540f; }
+.xg-op-tag.op-merge { background: #e8f5ec; color: #1a7f43; }
+.xg-op-tag.op-reword { background: #e6f0ff; color: #1a4f9c; }
+.xg-op-tag.op-fold { background: #fdf1e3; color: #97540f; }
+.xg-op-tag.op-keep { background: #f2f1ee; color: var(--ink-3); }
 .xg-op-text { flex: 1 1 auto; min-width: 0; word-break: break-word; }
 .xg-rev-keep { margin: 7px 0 0; font-size: 11px; color: var(--ink-3); }
+
+/* 提问式跨笔记：一句话问 → 一段回答 + 一张能点的清单 */
+.xg-ask-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 0; }
+.xg-ask-tags .xg-chip { font-size: 11.5px; }
+.xg-answer {
+  margin-top: 14px; padding: 11px 13px; border-radius: 9px;
+  background: #f7f6f3; border-left: 3px solid var(--accent);
+}
+.xg-answer-title { margin: 0 0 5px; font-size: 11.5px; color: var(--ink-3); letter-spacing: 0.02em; }
+.xg-answer-body {
+  margin: 0; font-size: 13px; line-height: 1.75; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
+.xg-plan { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
+.xg-plan-row {
+  display: flex; gap: 7px; align-items: flex-start; padding: 7px 8px;
+  border-radius: 7px; font-size: 12.5px; line-height: 1.6; color: var(--ink); cursor: pointer;
+}
+.xg-plan-row:hover { background: #f7f6f3; }
+.xg-plan-row.off { opacity: 0.45; }
+.xg-plan-row > input { flex: none; margin: 3px 0 0; cursor: pointer; }
+.xg-plan-dot { flex: none; width: 13px; text-align: center; color: var(--ink-3); }
+.xg-plan-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.xg-plan-text { word-break: break-word; }
+.xg-plan-where { color: var(--ink-3); font-size: 11.5px; }
+.xg-plan-why { font-size: 11.5px; line-height: 1.55; color: var(--ink-3); word-break: break-word; }
+
+.xg-manual { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.xg-manual > summary {
+  font-size: 11.5px; color: var(--ink-3); cursor: pointer; list-style: none;
+  user-select: none; padding: 2px 0;
+}
+.xg-manual > summary::-webkit-details-marker { display: none; }
+.xg-manual > summary::before { content: '▸ '; }
+.xg-manual[open] > summary::before { content: '▾ '; }
+.xg-manual > summary:hover { color: var(--ink); }
+.xg-manual .ai-area { margin-top: 8px; }
 
 @media (max-width: 860px) {
   .ask-thread { max-height: 40vh; }

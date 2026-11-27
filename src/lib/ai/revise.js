@@ -543,13 +543,16 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
   ]
   const tools = reviseTools(allowSplit)
   let fellBack = false
+  // 思考开关一旦降级、或某一轮没产出思考内容，后面就一路关着：那几段 assistant 消息里
+  // 没有 reasoning_content，思考模式下再发会被 DeepSeek 直接 400 拒掉
+  let think = thinkOn(conf)
 
   // 一轮只想一个动作：不再要求模型一次吐出整篇 JSON，它想怎么改就调哪个工具
   for (let round = 0; round < MAX_REVISE_ROUNDS && !ctx.done; round++) {
     let res
     try {
       res = await chatStreamTools(msgs, {
-        cfg: conf,
+        cfg: think ? conf : { ...conf, thinking: 'off' },
         tools,
         temperature: 0.25,
         maxTokens: 2500,
@@ -562,7 +565,7 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
       if (e.noTools) throw new Error(`当前模型不支持工具调用（整篇助手需要），到「设置」换成 deepseek-chat 这类通用模型再试`)
       throw e
     }
-    const { text, toolCalls, reasoning } = res
+    const { text, toolCalls, reasoning, thinking } = res
     // 它不调工具、直接说话了：把这句留成 advice，已经改好的照旧保留
     if (!toolCalls.length) {
       if (!ctx.advice) ctx.advice = str(text).replace(/\s+/g, ' ').trim().slice(0, 120)
@@ -574,7 +577,8 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
       tool_calls: toolCalls.map((c) => ({ id: c.id, type: 'function', function: c.function })),
     }
     // DeepSeek 开思考又要带 tools 时，下一轮必须把这个字段原样回传，否则直接 400
-    if (reasoning) said.reasoning_content = reasoning
+    if (thinking && reasoning) said.reasoning_content = reasoning
+    if (!(thinking && reasoning)) think = false
     msgs.push(said)
     for (const c of toolCalls) {
       let args = {}

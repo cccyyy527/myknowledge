@@ -2,7 +2,7 @@
 
 import { liveNoteById } from '../store.js'
 import { searchNotes, noteText, noteIsEmpty } from '../retrieve.js'
-import { loadAI, isAiReady, chatStreamTools } from './client.js'
+import { loadAI, isAiReady, thinkOn, chatStreamTools } from './client.js'
 import { SECTIONS, str, normalizeBlocks, stripMark, OUTSIDE_MARK } from './schema.js'
 import { planEdits } from './block-edit.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
@@ -296,11 +296,15 @@ export async function agentRun({
   signal,
 } = {}) {
   if (!isAiReady(cfg || loadAI())) throw new Error('还没填 API Key，先到「设置」里配一下')
+  const conf = cfg || loadAI()
   const msgs = [...messages]
   const ctx = { refs: refs.map((r) => ({ ...r })), proposal: null }
+  // 思考开关一旦降级或这一轮没产出思考内容，后面就一路关着：历史里的 assistant 消息已经
+  // 缺 reasoning_content，DeepSeek 在思考模式下会因此直接 400，补不回来了
+  let think = thinkOn(conf)
   const call = (extra) =>
     chatStreamTools(msgs, {
-      cfg,
+      cfg: think ? conf : { ...conf, thinking: 'off' },
       tools: TOOLS,
       temperature: strict ? 0.1 : 0.25,
       maxTokens,
@@ -311,7 +315,7 @@ export async function agentRun({
     })
   let answer = ''
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const { text, toolCalls, reasoning } = await call()
+    const { text, toolCalls, reasoning, thinking } = await call()
     if (!toolCalls.length) {
       answer = text
       msgs.push({ role: 'assistant', content: text })
@@ -323,7 +327,8 @@ export async function agentRun({
       tool_calls: toolCalls.map((c) => ({ id: c.id, type: 'function', function: c.function })),
     }
     // DeepSeek 开思考时，带 tools 的下一轮必须原样回传 reasoning_content，否则 400
-    if (reasoning) am.reasoning_content = reasoning
+    if (thinking && reasoning) am.reasoning_content = reasoning
+    if (!(thinking && reasoning)) think = false
     msgs.push(am)
     for (const c of toolCalls) {
       const out = runTool(ctx, c)

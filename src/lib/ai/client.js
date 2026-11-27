@@ -320,9 +320,15 @@ export function chatStreamTools(
   } = {},
 ) {
   const c = cfg || loadAI()
+  // 关思考时把历史里的 reasoning_content 去掉：那个字段只在思考模式下合法
+  const stripReasoning = (list) =>
+    list.some((m) => 'reasoning_content' in m)
+      ? list.map(({ reasoning_content, ...rest }) => rest)
+      : list
   const once = (cc) => {
+    const on = thinkOn(cc)
     const mt = budgetOf(maxTokens, cc)
-    const body = { messages, temperature, max_tokens: mt, stream: true }
+    const body = { messages: on ? messages : stripReasoning(messages), temperature, max_tokens: mt, stream: true }
     if (tools?.length) {
       body.tools = tools
       body.tool_choice = toolChoice || 'auto'
@@ -369,7 +375,9 @@ export function chatStreamTools(
         e.starved = Boolean(reasoning) && finish === 'length'
         throw e
       }
-      return { text: full, toolCalls, reasoning }
+      // thinking 是「这一轮到底有没有开思考」：调用方要靠它决定要不要把 reasoning_content
+      // 原样回传给 API，降级重跑过的那一轮是 false
+      return { text: full, toolCalls, reasoning, thinking: on }
     }).catch((e) => {
       // 端点压根不认 tools / functions 时才值得退回预检索流程：只认 4xx 里明确提到 tools 的报错，
       // 别让「超时」「没返回内容」这种偶发错误把 agent 永久关掉

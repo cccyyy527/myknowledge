@@ -546,15 +546,23 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
 
   // 一轮只想一个动作：不再要求模型一次吐出整篇 JSON，它想怎么改就调哪个工具
   for (let round = 0; round < MAX_REVISE_ROUNDS && !ctx.done; round++) {
-    const { text, toolCalls, reasoning } = await chatStreamTools(msgs, {
-      cfg: conf,
-      tools,
-      temperature: 0.25,
-      maxTokens: 2500,
-      onNoThinking: () => {
-        fellBack = true
-      },
-    })
+    let res
+    try {
+      res = await chatStreamTools(msgs, {
+        cfg: conf,
+        tools,
+        temperature: 0.25,
+        maxTokens: 2500,
+        onNoThinking: () => {
+          fellBack = true
+        },
+      })
+    } catch (e) {
+      // 整篇助手是靠工具一块块改的，模型不认 tools 就干不了活：直接说清该换模型
+      if (e.noTools) throw new Error(`当前模型不支持工具调用（整篇助手需要），到「设置」换成 deepseek-chat 这类通用模型再试`)
+      throw e
+    }
+    const { text, toolCalls, reasoning } = res
     // 它不调工具、直接说话了：把这句留成 advice，已经改好的照旧保留
     if (!toolCalls.length) {
       if (!ctx.advice) ctx.advice = str(text).replace(/\s+/g, ' ').trim().slice(0, 120)

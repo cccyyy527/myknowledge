@@ -373,6 +373,38 @@ export function touchNote(note) {
   note.updatedAt = new Date().toISOString()
 }
 
+// 原地改写一篇：id / createdAt / 标签 / 置顶全部留着，只换标题、分类和正文。
+// 反链靠 id，所以覆盖正文不会断任何 [[链接]]；标题走 renameNote，还按旧标题引用的老链接会一起跟过来。
+// 返回改动前的快照，撤销时原样塞回 restoreNoteVersion
+export function rewriteNote(id, { title = '', topicId = '', blocks = null } = {}) {
+  const n = noteById(id)
+  if (!n) return null
+  const before = {
+    title: n.title,
+    topicId: n.topicId,
+    domainId: n.domainId,
+    blocks: (n.blocks || []).map((b) => ({ ...b })),
+  }
+  const next = String(title || '').trim()
+  if (next && next !== n.title) renameNote(id, next)
+  if (topicId && topicId !== n.topicId) adoptNote(id, topicId)
+  if (blocks && blocks.length) n.blocks = idifyBlocks(blocks)
+  touchNote(n)
+  return before
+}
+
+// 撤销 rewriteNote：快照塞回去。同样走 renameNote，别把这次改出来的反链撇下
+export function restoreNoteVersion(id, before) {
+  const n = noteById(id)
+  if (!n || !before) return false
+  const next = String(before.title || '').trim()
+  if (next && next !== n.title) renameNote(id, next)
+  if (before.topicId) adoptNote(id, before.topicId)
+  if (before.blocks) n.blocks = before.blocks.map((b) => ({ ...b }))
+  touchNote(n)
+  return true
+}
+
 /* ---------- 改名 ---------- 
    正文里的链接默认写 [[id]]，改名本来就不影响；
    这里额外处理「还按标题引用的老链接」，让它们一起跟过来，别静默断掉。 */

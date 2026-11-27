@@ -3,8 +3,9 @@
 import { newBlockId, liveNoteById } from '../store.js'
 import { searchNotes, blockText } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
-import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks, assembleBlocks } from './schema.js'
+import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks, assembleBlocks, stripMark } from './schema.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
+import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 
 /* ---------- 段落归属 ---------- */
 
@@ -166,7 +167,7 @@ export function relatedNotes(note, { limit = 5 } = {}) {
     })
 }
 
-const REVISE_SYSTEM = `你在改一篇数据分析面试知识笔记。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
+const reviseSystem = (allowSplit) => `你在改一篇数据分析面试知识笔记。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
 
 ${BLOCK_SPEC}
 ${SECTION_SPEC}
@@ -177,14 +178,14 @@ ${SECTION_SPEC}
 - replace 改写已有块，type 也可以换（比如两个 paragraph 合成一张 definition）
 - add     新增块
 - drop    删掉已有块
-
+${allowSplit ? '- split   这篇装了两件不相关的事，把次要那部分挪去单独一篇（原篇不再留它们）\n' : ''}
 输出格式，按最终顺序列出：
 - 连续的 keep 合并成一条：{"op":"keep","ids":["b-x","b-y"]}
 - {"op":"move","id":"b-x","section":"detail"}
 - {"op":"replace","id":"b-x","block":{"type":"...", ...块字段}}
 - {"op":"add","section":"core","block":{...}}
 - {"op":"drop","id":"b-x"}
-
+${allowSplit ? '- {"op":"split","ids":["b-x","b-y"],"to":{"title":"新篇标题","topicId":"t-xxx","why":"为什么拆出去"}}\n  拆到同一篇的多组 split，to.title 写成一样的；topicId 从给出的分类树里原样复制\n' : ''}
 同一段内块的先后顺序 = 你输出 ops 的顺序，想调顺序就调 ops 的顺序。
 
 规则：
@@ -195,10 +196,10 @@ ${SECTION_SPEC}
 - ${NO_FABRICATE_WRITE}
 - 不要输出 heading 块，段落由 section 字段决定。
 - title 只在指令明确要求改标题时才给，否则省略这个字段。
-- advice 只有一句话：跨笔记那部分值得用户注意的事（该指过去的、说法冲突的）。没有就省略。
+- advice 只有一句话：跨笔记那部分值得用户注意的事（该指过去的、说法冲突的）。没有就省略。${allowSplit ? '\n- split 要克制：只有「这篇真正在讲两件事、拆开后各自更完整」才用。为了看起来整齐而拆细，只会让库更碎。' : ''}
 只输出一个 JSON 对象：{"title":"...","advice":"...","ops":[...]}`
 
-export async function reviseNote({ note, instruction, cfg, related } = {}) {
+export async function reviseNote({ note, instruction, cfg, related, allowSplit = false } = {}) {
   const cur = sectioned(note).map((r) => ({ ...r.block, section: r.section }))
   const rel = related === undefined ? relatedNotes(note) : arr(related)
   const relText = rel.length
@@ -220,15 +221,15 @@ ${relText}
 
 现有块（id 要原样引用）：
 ${JSON.stringify(cur)}
-
+${allowSplit ? `\n分类树（split 的 topicId 从这里原样复制）：\n${topicCatalog()}\n` : ''}
 想要的改动：${instruction}`
 
   const text = await chat(
     [
-      { role: 'system', content: REVISE_SYSTEM },
+      { role: 'system', content: reviseSystem(allowSplit) },
       { role: 'user', content: user },
     ],
-    { cfg, temperature: 0.3, maxTokens: 8000 },
+    { cfg, temperature: 0.3, maxTokens: 4000 },
   )
   const data = pickJson(text)
   return {
@@ -250,7 +251,7 @@ export function normalizeOps(raw, note) {
 
   for (const item of arr(raw)) {
     if (!item || typeof item !== 'object') continue
-    let op = ['keep', 'move', 'replace', 'add', 'drop'].includes(item.op) ? item.op : ''
+    let op = ['keep', 'move', 'replace', 'add', 'drop', 'split'].includes(item.op) ? item.op : ''
     const id = str(item.id)
 
     if (op === 'keep') {
@@ -275,6 +276,37 @@ export function normalizeOps(raw, note) {
       if (!all.has(id) || seen.has(id)) continue
       seen.add(id)
       out.push({ op: 'drop', id, block: all.get(id) })
+      continue
+    }
+
+    if (op === 'split') {
+      const to = item.to && typeof item.to === 'object' ? item.to : item
+      const title = stripMark(to.title)
+      if (!title) continue
+      const ids = arr(item.ids).length ? arr(item.ids).map(str) : [id]
+      const picked = []
+      for (const one of ids) {
+        if (!all.has(one) || seen.has(one)) continue
+        seen.add(one)
+        picked.push(all.get(one))
+      }
+      if (!picked.length) continue
+      // 编不出来的分类就跟着原篇走：拆出去的子篇默认和母篇同一类
+      const topicId = topicExists(str(to.topicId))
+        ? str(to.topicId)
+        : topicExists(note.topicId)
+          ? note.topicId
+          : fallbackTopicId()
+      const why = str(to.why)
+      // 拆到同一篇的多组 split 归成一条，别在面板上出现两张一模一样的卡
+      const same = out.find((o) => o.op === 'split' && o.to.title === title)
+      if (same) {
+        same.blocks.push(...picked)
+        same.ids.push(...picked.map((b) => b.id))
+        if (!same.to.why && why) same.to.why = why
+      } else {
+        out.push({ op: 'split', to: { title, topicId, why }, blocks: picked, ids: picked.map((b) => b.id) })
+      }
       continue
     }
 
@@ -313,7 +345,9 @@ const compact = (list) => {
 export function applyOps(note, rows) {
   const marks = new Map()
   const dropped = new Set()
-  if (!note) return { marks, dropped }
+  // 拆出去的内容按新篇标题归组，落库由调用方决定（这里只算，不建笔记）
+  const splits = new Map()
+  if (!note) return { marks, dropped, splits }
   const secOf = sectionsOf(note)
   const byId = new Map(sectioned(note).map((r) => [r.block.id, r.block]))
   const items = []
@@ -351,6 +385,28 @@ export function applyOps(note, rows) {
         done.add(r.id)
         dropped.add(r.id)
       }
+    } else if (r.op === 'split') {
+      // 整组勾选：移到新篇的块在原篇里删掉，不必逐块勾
+      if (!r.checked) continue
+      const moved = arr(r.blocks)
+      if (!moved.length) continue
+      const key = str(r.to && r.to.title) || '拆分出来的笔记'
+      if (!splits.has(key)) {
+        splits.set(key, {
+          title: key,
+          topicId: str(r.to && r.to.topicId),
+          why: str(r.to && r.to.why),
+          blocks: [],
+        })
+      }
+      const bag = splits.get(key)
+      for (const b of moved) {
+        if (done.has(b.id)) continue
+        done.add(b.id)
+        dropped.add(b.id)
+        marks.set(b.id, 'split')
+        bag.blocks.push(b)
+      }
     }
   }
   // 模型漏掉的原块按原样留住，别悄悄吃掉用户写的东西
@@ -359,5 +415,5 @@ export function applyOps(note, rows) {
     push(secOf.get(id), b)
   }
   note.blocks = compact(assembleBlocks(items))
-  return { marks, dropped }
+  return { marks, dropped, splits }
 }

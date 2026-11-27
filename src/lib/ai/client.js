@@ -101,7 +101,10 @@ const THINK_EXTRA = 4096
 const thinkOn = (c) => c?.thinking === 'on' && /deepseek\.com/i.test(c.base || '')
 
 // 只在真开思考时加预算，关着的时候行为和以前完全一样
-const budgetOf = (maxTokens, cfg) => (thinkOn(cfg || loadAI()) ? maxTokens + THINK_EXTRA : maxTokens)
+// 上限 8192 是 deepseek 单次输出的天花板，超了直接 400，所以加完要收一下
+const THINK_CAP = 8192
+const budgetOf = (maxTokens, cfg) =>
+  thinkOn(cfg || loadAI()) ? Math.min(maxTokens + THINK_EXTRA, THINK_CAP) : maxTokens
 
 // 所有请求都走这里：端点 / 鉴权 / 超时 / 取消只管一份，read 负责把 response 读成值
 async function request(cfg, body, { signal, timeoutMs, retry = 1 } = {}, read) {

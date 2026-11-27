@@ -1134,6 +1134,37 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .xg-where:disabled { cursor: default; opacity: 0.6; }
 .xg-fix { margin: 6px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--ink-3); }
 
+/* 逐篇原地重构：一篇一张卡，勾哪条写哪条 */
+.xg-rev { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.xg-rev.quiet { opacity: 0.55; }
+.xg-rev-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.xg-rev-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+.xg-rev-path { font-size: 11px; color: var(--ink-3); }
+.xg-rev-tag {
+  margin-left: auto; flex: none; padding: 0 7px; border-radius: 999px;
+  font-size: 10.5px; line-height: 16px; background: #f2f1ee; color: var(--ink-3);
+}
+.xg-rev-tag.on { background: #e8f5ec; color: #1a7f43; }
+.xg-rev-tag.bad { background: #fdeaea; color: #b42318; }
+.xg-rev-line { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--ink-2); }
+.xg-rev-op {
+  display: flex; gap: 6px; align-items: flex-start; margin-top: 6px;
+  font-size: 12.5px; line-height: 1.6; color: var(--ink); cursor: pointer;
+}
+.xg-rev-op.off { opacity: 0.45; }
+.xg-rev-op > input { flex: none; margin: 3px 0 0; cursor: pointer; }
+.xg-op-tag {
+  flex: none; padding: 0 5px; border-radius: 4px; font-size: 10.5px; line-height: 16px;
+  background: #f2f1ee; color: var(--ink-3);
+}
+.xg-op-tag.op-replace { background: #e6f0ff; color: #1a4f9c; }
+.xg-op-tag.op-add { background: #e8f5ec; color: #1a7f43; }
+.xg-op-tag.op-move { background: #eef0fb; color: #3f4a9c; }
+.xg-op-tag.op-drop { background: #fdeaea; color: #b42318; }
+.xg-op-tag.op-split { background: #fdf1e3; color: #97540f; }
+.xg-op-text { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+.xg-rev-keep { margin: 7px 0 0; font-size: 11px; color: var(--ink-3); }
+
 @media (max-width: 860px) {
   .ask-thread { max-height: 40vh; }
   .ask-bar { flex-direction: column; gap: 0; }

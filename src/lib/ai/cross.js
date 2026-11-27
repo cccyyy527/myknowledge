@@ -1,11 +1,21 @@
 // 跨笔记：把一组笔记揉成一篇新的（原篇一块都不动），或者只读地查它们之间的说法冲突
 
-import { state, liveNoteById } from '../store.js'
+import {
+  state,
+  liveNoteById,
+  createNote,
+  idifyBlocks,
+  touchNote,
+  rewriteNote,
+  restoreNoteVersion,
+  removeNote,
+} from '../store.js'
 import { noteText } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
-import { BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks } from './schema.js'
+import { BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks, stripMark } from './schema.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
+import { reviseNote, applyOps } from './revise.js'
 
 const MAX_NOTES = 6
 const BUDGET = 5000 // 每篇塞进 prompt 的字数上限，几篇加起来别把窗口撑爆
@@ -134,4 +144,102 @@ ${packNotes(notes)}`
     .filter(Boolean)
 
   return { items, notes: notes.map((n) => ({ id: n.id, title: n.title, path: pathName(n.topicId) })) }
+}
+
+/* ---------- 原地重构：逐篇判断该精简 / 归段 / 拆篇，结果写回原篇 ---------- */
+
+// 改动和新增默认勾上，删除和拆篇默认不勾 —— 抹内容、开新篇都是大动作，得人手点一下
+const decorate = (ops) =>
+  ops.map((o) => ({ ...o, checked: o.op === 'replace' || o.op === 'add' || o.op === 'move' }))
+
+// 告诉模型「这批还有哪几篇」：撞车的内容该指过去，而不是自己再写一遍
+// 同批用「」包、当前篇用《》包，两种括号区分开，模型不会把别人的标题当成自己的目标
+const briefFor = (note, all, extra) => {
+  const others = all.filter((n) => n.id !== note.id).map((n) => `「${n.title}」`)
+  const lines = [
+    `这一批一共 ${all.length} 篇一起过，现在只看《${note.title}》，只输出这一篇的改动。${others.length ? `同批还有 ${others.join('、')}，只用来对比撞车，不要改它们。` : ''}`,
+    '目标是让这篇自己站得住：该归段的归段、重复的删掉、过长的块拆开；跟同批别的篇撞车的，删掉或改成 [[指向那篇]]。',
+  ]
+  if (extra) lines.push(`我的额外要求：${extra}`)
+  return lines.join('\n')
+}
+
+// 一次只叫一篇：几篇的改动塞进一个 JSON 容易超长被截断，而且一篇失败不该连累别的
+export async function reviseNotes({ ids, instruction = '', cfg, onProgress } = {}) {
+  const notes = pickNotes(ids)
+  if (!notes.length) throw new Error('先勾一篇以上')
+  const out = []
+  for (let i = 0; i < notes.length; i++) {
+    const note = notes[i]
+    if (onProgress) onProgress({ index: i + 1, total: notes.length, title: note.title })
+    const row = {
+      id: note.id,
+      title: note.title,
+      path: pathName(note.topicId),
+      nextTitle: '',
+      advice: '',
+      ops: [],
+      error: '',
+    }
+    try {
+      const peers = notes
+        .filter((n) => n.id !== note.id)
+        .map((n) => ({
+          id: n.id,
+          title: n.title,
+          path: pathName(n.topicId),
+          text: noteText(n, { budget: 140 }).replace(/\n+/g, ' '),
+        }))
+      const r = await reviseNote({
+        note,
+        instruction: briefFor(note, notes, instruction),
+        cfg,
+        related: peers,
+        allowSplit: true,
+      })
+      row.nextTitle = r.title
+      row.advice = r.advice
+      row.ops = decorate(r.ops)
+    } catch (e) {
+      row.error = String((e && e.message) || e)
+    }
+    out.push(row)
+  }
+  return out
+}
+
+// 落库：按每篇勾过的 ops 改写原篇，拆出去的部分另建新篇。返回撤销用的快照
+export function commitRevises(items) {
+  const undo = []
+  const list = arr(items)
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i]
+    const note = liveNoteById(it && it.id)
+    if (!note) continue
+    const rows = arr(it.ops).filter((o) => o.op === 'keep' || o.checked)
+    if (!rows.some((o) => o.op !== 'keep')) continue
+    const draft = { title: note.title, blocks: (note.blocks || []).map((b) => ({ ...b })) }
+    const { splits } = applyOps(draft, rows)
+    const before = rewriteNote(note.id, { title: it.nextTitle || note.title, blocks: draft.blocks })
+    const made = []
+    for (const s of splits.values()) {
+      if (!s.blocks.length) continue
+      const nn = createNote(topicExists(s.topicId) ? s.topicId : note.topicId)
+      nn.title = stripMark(s.title).trim() || `${note.title}（续）`
+      nn.blocks = idifyBlocks(s.blocks.map((b) => ({ ...b })))
+      touchNote(nn)
+      made.push(nn.id)
+    }
+    undo.push({ id: note.id, before, made })
+  }
+  return undo
+}
+
+// 撤销一次落库：原篇按快照还原，拆出来的新篇进回收站（不是真删，还能捞回来）
+export function undoRevises(undo) {
+  const list = arr(undo).slice().reverse()
+  for (const u of list) {
+    if (u.before) restoreNoteVersion(u.id, u.before)
+    for (const id of arr(u.made)) removeNote(id)
+  }
 }

@@ -98,7 +98,7 @@ function thinkingOf(c) {
 // 就得另给思考留一份，否则它想完就没地方写正文了 —— 那正是「开了思考就不出内容」的原因。
 const THINK_EXTRA = 4096
 
-const thinkOn = (c) => c?.thinking === 'on' && /deepseek\.com/i.test(c.base || '')
+export const thinkOn = (c) => c?.thinking === 'on' && /deepseek\.com/i.test(c.base || '')
 
 // 只在真开思考时加预算，关着的时候行为和以前完全一样
 // 上限 8192 是 deepseek 单次输出的天花板，超了直接 400，所以加完要收一下
@@ -171,6 +171,9 @@ async function readSse(res, onData) {
 function noContent({ finish, reasoningChars = 0, maxTokens, raw } = {}) {
   const used = reasoningChars ? `，其中 ${reasoningChars} 字花在思考过程上` : ''
   const tail = raw ? `\n\n原始回包：${raw}` : ''
+  // 思考也算在 max_tokens 里，想太久就把正文位置占完了 —— 这个只能靠关思考解，调上限没用
+  if (finish === 'length' && reasoningChars)
+    return `模型没有返回内容：思考把输出额度用光了（max_tokens=${maxTokens ?? '?'}${used}），正文一个字没剩。关掉「深度思考」再试一次${tail}`
   if (finish === 'length')
     return `模型没有返回内容：输出撞到长度上限（max_tokens=${maxTokens ?? '?'}）${used}，把上限调大或让它少写点${tail}`
   if (finish === 'content_filter')
@@ -194,29 +197,43 @@ function brief(v) {
 }
 
 
-export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signal } = {}) {
-  const mt = budgetOf(maxTokens, cfg)
-  return request(
-    cfg,
-    { messages, temperature, max_tokens: mt, stream: false },
-    { signal },
-    async (res) => {
-      const json = await res.json()
-      const choice = json?.choices?.[0]
-      const text = choice?.message?.content
-      if (!text) {
-        throw new Error(
+export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signal, onNoThinking } = {}) {
+  const c = cfg || loadAI()
+  const once = (cc) => {
+    const mt = budgetOf(maxTokens, cc)
+    return request(
+      cc,
+      { messages, temperature, max_tokens: mt, stream: false },
+      { signal },
+      async (res) => {
+        const json = await res.json()
+        const choice = json?.choices?.[0]
+        const text = choice?.message?.content
+        if (text) return text
+        const reasoning = choice?.message?.reasoning_content || ''
+        const e = new Error(
           noContent({
             finish: choice?.finish_reason,
-            reasoningChars: (choice?.message?.reasoning_content || '').length,
+            reasoningChars: reasoning.length,
             maxTokens: mt,
             raw: brief(json?.error || json),
           }),
         )
-      }
-      return text
-    },
-  )
+        // 思考把额度吃光：正文空、思考有内容、且是撞上限结束的
+        e.starved = Boolean(reasoning) && choice?.finish_reason === 'length'
+        throw e
+      },
+    )
+  }
+
+  // DeepSeek 不给「思考预算」参数，思考想吃多少就吃多少，唯一能保证正文的办法就是关掉它。
+  // 所以思考撞死时自动关思考重跑一次：同一件事只换「想不想」，不重复劳动。
+  if (!thinkOn(c)) return once(c)
+  return once(c).catch(async (e) => {
+    if (!e.starved || signal?.aborted) throw e
+    onNoThinking && onNoThinking()
+    return once({ ...c, thinking: 'off' })
+  })
 }
 
 // 同一套接口的流式版本：边收边显示，长答案不用干等

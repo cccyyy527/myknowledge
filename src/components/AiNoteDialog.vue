@@ -129,6 +129,7 @@ const run = async (preset) => {
     rounds.value = [...rounds.value, ins]
     instruction.value = ''
     if (!r.ops.length) say('模型没给出可用的改动，换个说法再试', true)
+    else if (r.noticed) say('这次思考把输出额度吃光了，已自动关掉「深度思考」重跑一遍（本机这次请顺手把开关关掉，省得下次再撞）')
   } catch (e) {
     say(String(e.message || e), true)
   } finally {

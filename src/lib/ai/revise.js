@@ -2,7 +2,7 @@
 
 import { newBlockId, liveNoteById } from '../store.js'
 import { searchNotes, blockText } from '../retrieve.js'
-import { chat, pickJson } from './client.js'
+import { chat, pickJson, loadAI, thinkOn } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks, assembleBlocks, stripMark } from './schema.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
@@ -177,7 +177,7 @@ const roundsText = (history) => {
   return `\n前几轮已经改过这些（下面的块就是改完的样子，别重复做，也别撤销）：\n${list.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
 }
 
-const reviseSystem = (allowSplit, outside) => `你在改一篇数据分析面试知识笔记。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
+const reviseSystem = (allowSplit, outside, thinking) => `你在改一篇数据分析面试知识笔记。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
 
 ${BLOCK_SPEC}
 ${SECTION_SPEC}
@@ -209,7 +209,7 @@ ${outside ? `- 用户允许你用笔记之外的知识补内容。笔记里没�
 - 这类库外内容在对应的 op 上带 "outside":true，用户能在面板上逐条看到哪些是新知识、再决定要不要。只在 add / replace 上标，keep / move 不用标。
 - 库外内容也要守上面的规矩：不要编具体数字、论文名、公司案例；拿不准的就用 todo 块占位，别硬写。
 ` : ''}- 不要输出 heading 块，段落由 section 字段决定。
-- title 只在指令明确要求改标题时才给，否则省略这个字段。
+- title 只在指令明确要求改标题时才给，否则省略这个字段。${thinking ? '\n- 这是纯 JSON 输出任务：判断清楚就停，别在思考里把整篇稿子预演一遍。思考也算输出额度，想多了正文就没地方写了。' : ''}
 - advice 只有一句话：跨笔记那部分值得用户注意的事（该指过去的、说法冲突的）。没有就省略。${allowSplit ? '\n- split 要克制：只有「这篇真正在讲两件事、拆开后各自更完整」才用。为了看起来整齐而拆细，只会让库更碎。' : ''}
 只输出一个 JSON 对象：{"title":"...","advice":"...","ops":[...]}`
 
@@ -246,12 +246,21 @@ ${JSON.stringify(cur)}
 ${allowSplit ? `\n分类树（split 的 topicId 从这里原样复制）：\n${topicCatalog()}\n` : ''}${roundsText(history)}
 想要的改动：${str(instruction).trim() || '按结构诊断把这篇理顺，缺的段落补上'}`
 
+  let fellBack = false
+  const thinking = thinkOn(cfg || loadAI())
   const text = await chat(
     [
-      { role: 'system', content: reviseSystem(allowSplit, outside) },
+      { role: 'system', content: reviseSystem(allowSplit, outside, thinking) },
       { role: 'user', content: user },
     ],
-    { cfg, temperature: 0.3, maxTokens: 4000 },
+    {
+      cfg,
+      temperature: 0.3,
+      maxTokens: 4000,
+      onNoThinking: () => {
+        fellBack = true
+      },
+    },
   )
   const data = pickJson(text)
   return {
@@ -259,6 +268,7 @@ ${allowSplit ? `\n分类树（split 的 topicId 从这里原样复制）：\n${t
     advice: str(data.advice),
     related: rel,
     ops: normalizeOps(data.ops || data.blocks, note),
+    noticed: fellBack,
   }
 }
 

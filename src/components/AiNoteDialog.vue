@@ -24,6 +24,9 @@ const cfg = ref(loadAI())
 // 整篇重排是最该开思考的场景：要判断哪块放错段、哪些重复，慢一点换准一点
 const think = ref(false)
 const instruction = ref('')
+// 外部材料：用户从库外粘来的正文（转载、论文摘要、同事的文档），只用来补缺和纠错
+const material = ref('')
+const showMat = ref(false)
 const busy = ref(false)
 const msg = ref('')
 const bad = ref(false)
@@ -49,12 +52,16 @@ watch(
     related.value = []
     view.value = 'preview'
     showKeep.value = false
+    showMat.value = false
+    material.value = ''
     say('')
     if (!isAiReady(cfg.value)) say('还没配 API Key，先在顶栏 ✨ → 设置 里填一下', true)
   },
 )
 
 const ready = computed(() => isAiReady(cfg.value))
+// 指令和材料有一样就能跑
+const canRun = computed(() => !!(instruction.value.trim() || material.value.trim()))
 
 // 整篇助手只按固定五段重排：自定义小节会被并回去，先提醒一句
 const customSecs = computed(() => {
@@ -72,7 +79,10 @@ const decorate = (ops) =>
   ops.map((o) => ({ ...o, checked: o.op === 'replace' || o.op === 'add' || o.op === 'move' }))
 
 const run = async (preset) => {
-  const ins = String(preset ?? instruction.value).trim()
+  // 只贴了材料没写指令也算有效：默认按「把材料吃进这篇」处理
+  const ins =
+    String(preset ?? instruction.value).trim() ||
+    (material.value.trim() ? '用这份外部材料把这篇补全，材料里跟这篇无关的部分不要搬进来' : '')
   if (!ins || busy.value || !props.note) return
   busy.value = true
   rows.value = []
@@ -85,6 +95,7 @@ const run = async (preset) => {
     const r = await reviseNote({
       note: props.note,
       instruction: ins,
+      material: material.value,
       cfg: { ...cfg.value, thinking: think.value ? 'on' : 'off' },
     })
     titleHint.value = r.title
@@ -170,6 +181,7 @@ const apply = () => {
         说一句要怎么改，AI 把这篇当一份稿子重排。改动会先列出来（挪 / 改 / 新 / 删），你勾哪些就写哪些；
         懒得逐个勾就点「全部接受」（删除默认不勾，抹内容得自己点一下）。
         段落标题由程序按「核心结论 / 推导 / 高频问法 / 坑 / 待补」重新生成，你自己加的小节会被并回去。
+        手边有库外的文章或文档，点「＋ 外部材料」整段粘进来，AI 会只取跟这篇相关的部分补缺、纠错。
       </p>
 
       <div v-if="diag && diag.total" class="ai-struct">
@@ -189,6 +201,26 @@ const apply = () => {
         rows="3"
         placeholder="例：核心结论拆成 3 条断言；每个公式后面补一句直觉解释；把最后那段空话删掉"
       />
+
+      <div class="ai-acts">
+        <button class="chip-btn" :class="{ on: showMat }" @click="showMat = !showMat">
+          {{ showMat ? '− 收起外部材料' : '＋ 外部材料' }}
+        </button>
+        <span v-if="material.trim()" class="ai-hint">已贴 {{ material.trim().length }} 字，AI 会用它补缺和纠错</span>
+      </div>
+
+      <template v-if="showMat">
+        <textarea
+          v-model="material"
+          class="ai-area ai-mat"
+          rows="6"
+          placeholder="把外面的正文整段粘进来：公众号文章、论文摘要、同事整理的文档、面经原文都行。AI 只取跟这篇相关的部分补进来，材料里跟笔记冲突的地方会写进 advice 让你判断。"
+        />
+        <p class="ai-hint">
+          只认粘贴的正文。贴网址抓不到 —— 浏览器跨域拿不到别人的页面，先把正文复制过来。
+          超长材料只取前 12000 字。
+        </p>
+      </template>
 
       <div class="ai-acts wrap">
         <button
@@ -210,7 +242,7 @@ const apply = () => {
       <div class="ai-acts">
         <button
           class="ai-primary"
-          :disabled="busy || !ready || !instruction.trim()"
+          :disabled="busy || !ready || !canRun"
           @click="run()"
         >
           {{ busy ? '生成中…' : '✨ 生成改动' }}

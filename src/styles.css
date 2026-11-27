@@ -644,6 +644,8 @@ code { font-family: var(--mono); font-size: 0.9em; }
   resize: vertical;
 }
 .ai-area:focus { outline: none; border-color: var(--accent); background: #fff; }
+/* 外部材料：比指令框矮一档、字更小，视觉上让位给指令 */
+.ai-mat { margin-top: 8px; font-size: 12.5px; line-height: 1.65; background: #fbfaf8; }
 .ai-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .ai-acts.wrap { gap: 6px; }
 .ai-acts button {

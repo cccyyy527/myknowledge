@@ -34,7 +34,7 @@ const MAX = 6
 
 const cfg = ref(loadAI())
 // 深度思考只对这次面板有效：整合/查一致性都是「想清楚再答」受益的活
-const think = ref(false)
+const think = ref(loadAI().thinking === 'on')
 const q = ref('')
 const ids = ref([])
 const extra = ref('')

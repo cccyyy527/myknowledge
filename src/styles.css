@@ -686,6 +686,32 @@ code { font-family: var(--mono); font-size: 0.9em; }
   color: var(--accent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ai-rounds .ai-bulk-btn { margin-left: auto; }
+/* 整篇助手的对话流：每轮你说了什么、它动了哪几处，都留在这儿 */
+.ai-chat {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 210px; overflow-y: auto;
+  margin: 12px 0 4px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg);
+}
+.ai-turn { display: flex; gap: 8px; align-items: flex-start; }
+.ai-who {
+  flex: none; font-size: 10.5px; line-height: 1.9; padding: 0 6px; border-radius: 5px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--ink-3);
+}
+.ai-turn.me .ai-who { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.ai-line {
+  flex: 1 1 auto; margin: 0; font-size: 12px; line-height: 1.75; color: var(--ink-2);
+  white-space: pre-wrap; word-break: break-word;
+}
+.ai-turn.me .ai-line { color: var(--ink); }
+.ai-line.live { color: var(--ink-3); }
+.ai-line.live::after {
+  content: ''; display: inline-block; width: 5px; height: 5px; margin-left: 5px;
+  border-radius: 50%; background: var(--accent); vertical-align: middle;
+  animation: ai-blink 1s steps(2, start) infinite;
+}
+@keyframes ai-blink { to { opacity: 0; } }
+.ai-chat-foot { display: flex; justify-content: flex-end; }
 .ai-hint-bar {
   display: flex;
   flex-wrap: wrap;

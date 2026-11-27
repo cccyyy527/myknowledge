@@ -501,6 +501,16 @@ const planToOps = (ctx) => [
   ...ctx.splits,
 ]
 
+// 对话线程别无限长：超过这么多条就从最早的一轮用户消息处切（system + 开场快照永远留着）
+const MAX_THREAD = 26
+
+function trimThread(list) {
+  if (list.length <= MAX_THREAD) return list
+  let cut = list.length - (MAX_THREAD - 2)
+  while (cut < list.length - 1 && list[cut].role !== 'user') cut++
+  return [list[0], list[1], ...list.slice(cut)]
+}
+
 export async function reviseNote({
   note,
   instruction,
@@ -509,6 +519,7 @@ export async function reviseNote({
   allowSplit = false,
   outside = false,
   history = [],
+  messages,
   onStep,
 } = {}) {
   const cur = sectioned(note).map((r) => ({ ...r.block, section: r.section }))
@@ -522,7 +533,10 @@ export async function reviseNote({
         .join('\n')
     : '（库里没有明显相邻的笔记，这篇可以独立成篇）'
 
-  const user = `笔记标题：${note?.title || ''}
+  const conf = cfg || loadAI()
+  const want = str(instruction).trim() || '按结构诊断把这篇理顺，缺的段落补上'
+  const snap = `现有块（id 要原样引用）：\n${JSON.stringify(cur)}`
+  const intro = `笔记标题：${note?.title || ''}
 
 结构诊断（程序算的，比肉眼准）：
 ${diagnose(note).text}
@@ -530,17 +544,24 @@ ${diagnose(note).text}
 库里相邻的笔记：
 ${relText}
 
-现有块（id 要原样引用）：
-${JSON.stringify(cur)}
+${snap}
 ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：\n${topicCatalog()}\n` : ''}${roundsText(history)}
-想要的改动：${str(instruction).trim() || '按结构诊断把这篇理顺，缺的段落补上'}`
+想要的改动：${want}`
+  // 接着聊：把这一轮的现状和指令接在对话后面，模型记得自己前面改了什么、说过什么
+  const follow = `这一轮现在的样子（是你前面几轮改完的成品；块 id 以这里为准，以前的 id 已经作废）：
+${JSON.stringify(cur)}
 
-  const conf = cfg || loadAI()
-  const ctx = { plan: planOf(note), note, drops: [], splits: [], done: false, title: '', advice: '', seq: 0 }
-  const msgs = [
-    { role: 'system', content: reviseSystem(allowSplit, outside, thinkOn(conf)) },
-    { role: 'user', content: user },
-  ]
+这一轮要做的：${want}`
+
+  // 有线程就沿用（真对话），没有就开一条新的
+  const thread = arr(messages).length
+    ? [...messages.map((m) => ({ ...m })), { role: 'user', content: follow }]
+    : [
+        { role: 'system', content: reviseSystem(allowSplit, outside, thinkOn(conf)) },
+        { role: 'user', content: intro },
+      ]
+
+  const ctx = { plan: planOf(note), note, drops: [], splits: [], done: false, title: '', advice: '', reply: '', seq: 0 }
   const tools = reviseTools(allowSplit)
   let fellBack = false
   // 思考开关一旦降级、或某一轮没产出思考内容，后面就一路关着：那几段 assistant 消息里
@@ -551,7 +572,7 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
   for (let round = 0; round < MAX_REVISE_ROUNDS && !ctx.done; round++) {
     let res
     try {
-      res = await chatStreamTools(msgs, {
+      res = await chatStreamTools(thread, {
         cfg: think ? conf : { ...conf, thinking: 'off' },
         tools,
         temperature: 0.25,
@@ -566,9 +587,17 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
       throw e
     }
     const { text, toolCalls, reasoning, thinking } = res
-    // 它不调工具、直接说话了：把这句留成 advice，已经改好的照旧保留
+    // 它不调工具、直接说话了：放回对话线程里（用户能接着追问），已经改好的照旧保留
     if (!toolCalls.length) {
-      if (!ctx.advice) ctx.advice = str(text).replace(/\s+/g, ' ').trim().slice(0, 120)
+      const said = str(text).trim()
+      if (said) {
+        ctx.reply = said
+        if (!ctx.advice) ctx.advice = said.replace(/\s+/g, ' ').slice(0, 120)
+        const m = { role: 'assistant', content: said }
+        if (thinking && reasoning) m.reasoning_content = reasoning
+        if (!(thinking && reasoning)) think = false
+        thread.push(m)
+      }
       break
     }
     const said = {
@@ -579,7 +608,7 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
     // DeepSeek 开思考又要带 tools 时，下一轮必须把这个字段原样回传，否则直接 400
     if (thinking && reasoning) said.reasoning_content = reasoning
     if (!(thinking && reasoning)) think = false
-    msgs.push(said)
+    thread.push(said)
     for (const c of toolCalls) {
       let args = {}
       try {
@@ -589,13 +618,15 @@ ${allowSplit ? `\n分类树（split_note 的 topicId 从这里原样复制）：
       }
       const out = runReviseTool(ctx, c.function.name, args)
       if (onStep && out.summary) onStep(out.summary)
-      msgs.push({ role: 'tool', tool_call_id: c.id, content: out.content })
+      thread.push({ role: 'tool', tool_call_id: c.id, content: out.content })
     }
   }
 
   return {
     title: stripMark(ctx.title),
     advice: ctx.advice,
+    reply: ctx.reply,
+    messages: trimThread(thread),
     related: rel,
     ops: normalizeOps(planToOps(ctx), note),
     noticed: fellBack,

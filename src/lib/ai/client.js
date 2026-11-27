@@ -8,8 +8,11 @@ export const DEFAULT_AI = {
   base: 'https://api.deepseek.com',
   model: 'deepseek-flash',
   key: '',
-  // DeepSeek 默认开思考模式，会把 max_tokens 烧在链式思考上导致正文为空；写字类活默认关掉
-  thinking: 'off',
+  // 默认开思考：判断「哪块放错段、哪些重复」这类活明显更准。思考的额度是另加的
+  // （见 THINK_EXTRA），正文不会被思考挤空；面板上的勾选框随时能关成快模式
+  thinking: 'on',
+  // 配置版本：旧版默认是关思考，升上来按新默认开一次；之后用户自己关掉就记住了
+  v: 2,
 }
 
 // 识图要单独的模型：DeepSeek 没有视觉，随便配一个能看图的就行
@@ -24,7 +27,10 @@ export function loadAI() {
     const raw = localStorage.getItem(CFG_KEY)
     if (raw) {
       const j = JSON.parse(raw) || {}
-      return { ...DEFAULT_AI, ...j, vision: { ...DEFAULT_VISION, ...(j.vision || {}) } }
+      const cfg = { ...DEFAULT_AI, ...j, vision: { ...DEFAULT_VISION, ...(j.vision || {}) } }
+      // 老配置存的是「默认关思考」那版，跟着新默认开一次；再保存就带上 v，之后不再动它
+      if (!(j.v >= DEFAULT_AI.v)) cfg.thinking = DEFAULT_AI.thinking
+      return cfg
     }
   } catch (e) {
     console.warn('AI 配置读取失败', e)

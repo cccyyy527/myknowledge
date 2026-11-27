@@ -22,9 +22,9 @@ const PRESETS = [
 
 const cfg = ref(loadAI())
 // 整篇重排是最该开思考的场景：要判断哪块放错段、哪些重复，慢一点换准一点
-const think = ref(false)
-// 是否允许模型用笔记之外的知识补内容；默认不许，打开的那些块在面板上标「库外」
-const outside = ref(false)
+const think = ref(loadAI().thinking === 'on')
+// 是否允许模型用笔记之外的知识补内容：默认允许，补进来的块在面板上标「库外」好让你挑
+const outside = ref(true)
 const instruction = ref('')
 const busy = ref(false)
 const msg = ref('')
@@ -36,7 +36,9 @@ const related = ref([])
 
 // 多轮对话：每一轮都在「上一轮你调完的样子」上继续改，而不是回最初那版重来
 const base = ref(null) // { title, blocks }，null = 还没跑过
-const rounds = ref([]) // 前几轮的指令，带给模型免得它重复做同一件事
+const rounds = ref([]) // 前几轮要过什么，控制 placeholder / 按钮文案
+const thread = ref([]) // 真对话消息（含 system 和工具调用记录），跨轮交给模型
+const chat = ref([]) // 面板上看到的对话流：{ who: 'me'|'ai', text, live }
 const title = ref('')
 
 const clone = (v) => JSON.parse(JSON.stringify(v))
@@ -46,9 +48,24 @@ const say = (t, isBad = false) => {
   bad.value = isBad
 }
 
+const pushChat = (m) => {
+  chat.value = [...chat.value, m]
+}
+
+// 每轮最后一条是 AI 那条，实时把「正在动第几块」写进去，用户能看着它干活
+const stepChat = (t, live = true) => {
+  const list = chat.value.slice()
+  const i = list.length - 1
+  if (i < 0 || list[i].who !== 'ai') return
+  list[i] = { ...list[i], text: t, live }
+  chat.value = list
+}
+
 const restart = () => {
   base.value = null
   rounds.value = []
+  thread.value = []
+  chat.value = []
   title.value = ''
   rows.value = []
   titleHint.value = ''
@@ -110,6 +127,7 @@ const run = async (preset) => {
   related.value = []
   view.value = 'preview'
   say('')
+  chat.value = [...chat.value, { who: 'me', text: ins }, { who: 'ai', text: '先看一下这篇…', live: true }]
   try {
     const r = await reviseNote({
       note: {
@@ -119,20 +137,42 @@ const run = async (preset) => {
       instruction: ins,
       outside: outside.value,
       history: rounds.value,
+      messages: thread.value,
       cfg: { ...cfg.value, thinking: think.value ? 'on' : 'off' },
-      onStep: (step) => say(step),
+      onStep: (step) => {
+        say(step)
+        stepChat(step)
+      },
     })
+    // 线程要留下来：下一轮模型靠它记得自己前后改了什么、说过什么
+    if (r.messages) thread.value = r.messages
     if (r.title) title.value = r.title
     titleHint.value = r.title
-    advice.value = r.advice || ''
+    // 模型只是回话时，advice 就是那句话本身：已经在对话流里显示过了，别再重复成「跨笔记」
+    const said = String(r.reply || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    advice.value = r.advice && !(said && said.startsWith(String(r.advice).trim())) ? r.advice : ''
     related.value = r.related || []
     rows.value = decorate(r.ops)
     rounds.value = [...rounds.value, ins]
     instruction.value = ''
-    if (!r.ops.some((o) => o.op !== 'keep')) say('这一轮没找到要动的地方，把要求说具体点再试', true)
+    const moved = r.ops.filter((o) => o.op === 'move').length
+    const wrote = r.ops.filter((o) => o.op === 'replace').length
+    const added = r.ops.filter((o) => o.op === 'add').length
+    const cut = r.ops.filter((o) => o.op === 'drop').length
+    const total = moved + wrote + added + cut
+    const tally = [moved && `挪 ${moved}`, wrote && `改 ${wrote}`, added && `新 ${added}`, cut && `删 ${cut}`]
+      .filter(Boolean)
+      .join(' / ')
+    if (r.reply) stepChat(r.reply, false)
+    else if (total) stepChat(`这轮动了 ${total} 处（${tally}）。下面勾上要写的，然后接着说还要改什么。`, false)
+    else stepChat('这轮没动东西 —— 换个说法，或者点上面的常用要求。', false)
+    if (!total) say(r.reply ? '' : '这一轮没找到要动的地方，把要求说具体点再试', !r.reply)
     else if (r.noticed) say('这次思考把输出额度吃光了，已自动关掉「深度思考」重跑一遍（本机这次请顺手把开关关掉，省得下次再撞）')
     else say('')
   } catch (e) {
+    stepChat(`出错了：${String(e.message || e)}`, false)
     say(String(e.message || e), true)
   } finally {
     busy.value = false
@@ -197,6 +237,8 @@ const apply = () => {
   props.note.blocks = next.blocks.map((b) => ({ ...b }))
   base.value = null
   rounds.value = []
+  thread.value = []
+  chat.value = []
   rows.value = []
   emit('applied')
   emit('close')
@@ -215,7 +257,7 @@ const apply = () => {
         说一句要怎么改，AI 把这篇当一份稿子重排。改动会先列出来（挪 / 改 / 新 / 删），你勾哪些就写哪些；
         懒得逐个勾就点「全部接受」（删除默认不勾，抹内容得自己点一下）。
         段落标题由程序按「核心结论 / 推导 / 高频问法 / 坑 / 待补」重新生成，你自己加的小节会被并回去。
-        默认只用这篇现有的内容重排；想让 AI 用自己知道的东西补上空白处，勾「库外知识」，补进去的块会单独标出来。
+        默认允许 AI 用自己知道的东西补空白处（「库外知识」默认勾着，补进去的块会单独标出来）；只想重排现有内容就把它勾掉。
       </p>
 
       <div v-if="diag && diag.total" class="ai-struct">
@@ -229,10 +271,15 @@ const apply = () => {
         >
       </p>
 
-      <p v-if="rounds.length" class="ai-rounds">
-        <span v-for="(r, i) in rounds" :key="i" class="rnd">第 {{ i + 1 }} 轮：{{ r }}</span>
-        <button class="ai-bulk-btn" :disabled="busy" @click="restart">回到最初那版</button>
-      </p>
+      <div v-if="chat.length" class="ai-chat">
+        <div v-for="(m, i) in chat" :key="i" class="ai-turn" :class="m.who">
+          <span class="ai-who">{{ m.who === 'me' ? '我' : 'AI' }}</span>
+          <p class="ai-line" :class="{ live: m.live }">{{ m.text }}</p>
+        </div>
+        <div class="ai-chat-foot">
+          <button class="ai-bulk-btn" :disabled="busy" @click="restart">回到最初那版</button>
+        </div>
+      </div>
 
       <textarea
         v-model="instruction"
@@ -240,7 +287,7 @@ const apply = () => {
         rows="3"
         :placeholder="
           rounds.length
-            ? '接着上一轮说：例，第 2 条再具体一点；刚才删的坑挪到「坑」那段而不是删掉；把标题改成…'
+            ? '接着上一轮说，它记得前面改过什么：例，第 2 条再具体一点；刚才那个坑别删，挪到「坑」那段；这篇到底缺什么？'
             : '例：核心结论拆成 3 条断言；每个公式后面补一句直觉解释；把最后那段空话删掉'
         "
       />

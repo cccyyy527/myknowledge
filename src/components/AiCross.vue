@@ -14,12 +14,15 @@ import {
   isAiReady,
   planCross,
   commitCross,
-  undoCross,
+  loadRuns,
+  logRun,
+  undoRun,
+  forgetRun,
+  RUN_KIND,
   mergeNotes,
   auditNotes,
   reviseNotes,
   commitRevises,
-  undoRevises,
   assembleBlocks,
   stripMark,
   SECTIONS,
@@ -47,11 +50,30 @@ const msg = ref('')
 const bad = ref(false)
 
 const plan = ref(null) // 提问结果：一段回答 + 一份能点的清单
-const planUndo = ref(null) // 上次执行清单的撤销快照
 const merged = ref(null) // 整合结果：新笔记草案
 const audit = ref(null) // 一致性结果
 const revises = ref([]) // 逐篇重构结果
-const undoStack = ref([]) // 上次写入的撤销快照
+
+// 改动流水存在本机，面板重开 / 切去笔记回来都还在，撤销随时点得到
+const runs = ref(loadRuns())
+// 面板是按需挂载的：一进来就得知道要不要摊开历史，光靠 watch 会漏掉首次挂载
+const runsOpen = ref(runs.value.some((r) => !r.undoneAt && r.undo))
+
+const refreshRuns = () => {
+  runs.value = loadRuns()
+}
+
+const when = (at) => {
+  const t = new Date(at || 0).getTime()
+  if (!t) return ''
+  const d = Date.now() - t
+  if (d < 60e3) return '刚刚'
+  if (d < 3600e3) return `${Math.floor(d / 60e3)} 分钟前`
+  if (d < 86400e3) return `${Math.floor(d / 3600e3)} 小时前`
+  const dt = new Date(t)
+  const hm = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`
+  return `${dt.getMonth() + 1}-${dt.getDate()} ${hm}`
+}
 
 const ready = computed(() => isAiReady(cfg.value))
 const spinLabel = computed(
@@ -77,11 +99,12 @@ watch(
     ask.value = ''
     extra.value = ''
     plan.value = null
-    planUndo.value = null
     merged.value = null
     audit.value = null
     revises.value = []
-    undoStack.value = []
+    runs.value = loadRuns()
+    // 有能撤的就把历史摊开，进来第一眼看得见
+    runsOpen.value = runs.value.some((r) => !r.undoneAt && r.undo)
     say('')
   },
 )
@@ -168,7 +191,6 @@ const runAsk = async () => {
   if (!ready.value) return say('还没配 API Key，去「设置」填一下', true)
   busy.value = 'ask'
   plan.value = null
-  planUndo.value = null
   merged.value = null
   audit.value = null
   revises.value = []
@@ -189,23 +211,54 @@ const planCount = computed(() =>
   plan.value ? plan.value.items.filter((it) => it.checked && it.op !== 'keep').length : 0,
 )
 
+// 落到流水里的每一行写清「哪篇 · 做了什么」，回头翻历史不用靠回忆
+const planLines = (items) =>
+  items
+    .filter((it) => it.checked && it.op !== 'keep')
+    .map((it) => (it.op === 'fold' || it.op === 'split' ? planText(it) : `${it.noteTitle}：${planText(it)}`))
+
 const applyPlan = () => {
   if (!planCount.value) return say('一项都没勾，没什么可做的', true)
-  const undo = commitCross(plan.value.items)
-  planUndo.value = undo
+  const items = plan.value.items
+  const lines = planLines(items)
+  const undo = commitCross(items)
+  logRun({ kind: 'plan', question: plan.value.question || ask.value, answer: plan.value.answer, lines, undo })
+  refreshRuns()
+  runsOpen.value = true
   plan.value = null
   const parts = []
   if (undo.notes.length) parts.push(`改了 ${undo.notes.length} 篇`)
   if (undo.made.length) parts.push(`拆出 ${undo.made.length} 篇新笔记`)
   if (undo.restored.length) parts.push(`${undo.restored.length} 篇并进别篇、已进回收站`)
-  say(parts.length ? `${parts.join('，')}。不满意可以撤销。` : '这几条实际没什么可改的')
+  say(
+    parts.length
+      ? `${parts.join('，')}。记录留在下面的「改动历史」里，随时能撤。`
+      : '这几条实际没什么可改的',
+  )
 }
 
-const undoPlan = () => {
-  if (!planUndo.value) return
-  undoCross(planUndo.value)
-  planUndo.value = null
-  say('已撤销，笔记回到改之前的样子')
+// 撤销：流水里的快照回滚。这之后又手改过的篇，先确认再动
+const undoAt = (run) => {
+  const r = undoRun(run.id)
+  if (r.ok) {
+    refreshRuns()
+    return say('已撤销，笔记回到改之前的样子')
+  }
+  if (r.reason === 'changed') {
+    const names = r.changed.map((c) => `《${c.title}》`).join('、')
+    if (!confirm(`${names} 在这次写入之后又被改过，撤销会把那些改动一起退回去。继续？`)) return
+    const again = undoRun(run.id, { force: true })
+    refreshRuns()
+    return say(again.ok ? '已撤销，笔记回到这次写入之前的样子' : '没撤成，这篇可能已经不在了', !again.ok)
+  }
+  if (r.reason === 'gone') return say('这次改动的快照已经过期，只能看记录了', true)
+  if (r.reason === 'done') return say('这次已经撤销过了', true)
+  say('找不到这次记录了', true)
+}
+
+const forget = (run) => {
+  forgetRun(run.id)
+  refreshRuns()
 }
 
 const runMerge = async () => {
@@ -316,7 +369,6 @@ const runRevise = async () => {
   merged.value = null
   audit.value = null
   revises.value = []
-  undoStack.value = []
   say('')
   try {
     const r = await reviseNotes({
@@ -341,20 +393,20 @@ const runRevise = async () => {
 const applyRevises = () => {
   const picked = revises.value.filter(usable)
   if (!revCount.value) return say('一处都没勾，没什么可写的', true)
-  undoStack.value = commitRevises(picked)
-  const made = undoStack.value.reduce((s, u) => s + u.made.length, 0)
+  const lines = []
+  for (const it of picked) {
+    for (const o of moves(it)) if (o.checked) lines.push(`${it.title}：${OPS[o.op]} ${opText(o)}`)
+  }
+  const undo = commitRevises(picked)
+  logRun({ kind: 'revise', question: extra.value, lines, undo })
+  refreshRuns()
+  runsOpen.value = true
+  const made = undo.reduce((s, u) => s + u.made.length, 0)
   revises.value = []
   off.value = []
   say(
-    `改了 ${undoStack.value.length} 篇${made ? `，另拆出 ${made} 篇新笔记` : ''}。原篇 id 和反链都还在，不满意可以撤销。`,
+    `改了 ${undo.length} 篇${made ? `，另拆出 ${made} 篇新笔记` : ''}。记录留在「改动历史」里，随时能撤。`,
   )
-}
-
-const undoLast = () => {
-  if (!undoStack.value.length) return
-  undoRevises(undoStack.value)
-  undoStack.value = []
-  say('已撤销，笔记回到改之前的样子')
 }
 
 const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
@@ -365,6 +417,40 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
     <p class="ai-tip">
       勾几篇（最多 6 篇），直接问它们一句话：<strong>哪里对不上、哪里讲重了、哪篇该拆、哪篇该并</strong>。AI 先给结论，再给一张能点的清单——归位、合并、改写、删块、拆篇、并篇，你勾哪条它才做哪条，做完能撤销。
     </p>
+
+    <!-- 改动历史：面板重开、切去笔记看一圈回来，记录都还在，撤销随时点得到 -->
+    <details v-if="runs.length" class="xg-runs" :open="runsOpen" @toggle="runsOpen = $event.target.open">
+      <summary>跨笔记改动历史（{{ runs.length }}）</summary>
+      <div v-for="r in runs" :key="r.id" class="xg-run" :class="{ gone: r.undoneAt }">
+        <div class="xg-run-head">
+          <span class="xg-run-kind">{{ RUN_KIND[r.kind] || '改动' }}</span>
+          <span class="xg-run-time">{{ when(r.at) }}</span>
+          <span v-if="r.undoneAt" class="xg-run-tag">已撤销</span>
+          <button v-else-if="!r.undo" class="xg-run-tag flat" disabled>快照已过期</button>
+          <button v-else class="xg-run-undo" @click="undoAt(r)">↩︎ 撤销这次</button>
+          <button class="xg-run-x" title="只删这条记录，不动笔记" @click="forget(r)">×</button>
+        </div>
+        <p v-if="r.question" class="xg-run-q">
+          {{ r.kind === 'plan' ? '问' : '要求' }}：{{ r.question }}
+        </p>
+        <p v-if="r.answer" class="xg-run-a">{{ stripMark(r.answer) }}</p>
+        <ul v-if="r.lines.length" class="xg-run-lines">
+          <li v-for="(l, i) in r.lines" :key="i">{{ l }}</li>
+        </ul>
+        <p v-if="r.notes.length" class="xg-run-notes">
+          涉及：
+          <button
+            v-for="n in r.notes"
+            :key="n.id"
+            class="xg-chip"
+            :disabled="n.trashed"
+            @click="jump(n.id)"
+          >
+            {{ n.title }}{{ n.trashed ? '（回收站）' : n.made ? '（新建）' : '' }}
+          </button>
+        </p>
+      </div>
+    </details>
 
     <div class="xg-search-row">
       <input v-model="q" class="xg-search" placeholder="搜标题 / 标签 / 分类 / 正文" />
@@ -460,10 +546,6 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
       </template>
     </template>
 
-    <div v-if="planUndo" class="ai-acts">
-      <button @click="undoPlan">↩︎ 撤销这次写入（回到改之前）</button>
-    </div>
-
     <!-- 老的三条路径收进这里，不占主动作的位置 -->
     <details class="xg-manual">
       <summary>手动模式：整合成新篇 / 逐篇原地重构 / 查一致性（只读）</summary>
@@ -485,10 +567,6 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
         </button>
       </div>
     </details>
-
-    <div v-if="undoStack.length" class="ai-acts">
-      <button @click="undoLast">↩︎ 撤销这次写入（回到改之前）</button>
-    </div>
 
     <!-- 逐篇原地重构：每篇一节，勾哪条就写哪条 -->
     <template v-if="revises.length">

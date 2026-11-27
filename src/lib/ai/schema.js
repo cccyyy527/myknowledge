@@ -52,8 +52,27 @@ export const arr = (v) => (Array.isArray(v) ? v : [])
 export const OUTSIDE_MARK = '【库外】'
 const MARK_RE = /【\s*库外(?:补充)?\s*】/g
 
+// 块 id / 笔记 id 只给工具认（read_note 用它指块、save_note 的 blockId 填它），
+// 模型偶尔会把 [#b-xxxx] 这类编号抄进回答正文，渲染和落盘前一律削掉
+const ID_MARK_RE = /\[#[^\]\n]{1,40}\]/g
+// 独立的不带 g 的版本：带 g 的正则 test() 会记状态，连着调用结果会来回跳
+const hasIdMark = (s) => /\[#[^\]\n]{1,40}\]/.test(s)
+
+// 削掉编号后顺手把留下的空格和悬空标点收干净：「四项 [#a] [#b]、三组」→「四项、三组」
+const tidyIds = (s) =>
+  s
+    .replace(/[ \t]*\[#[^\]\n]{1,40}\][ \t]*/g, ' ')
+    .replace(/[ \t]+([，。、；：！？,.!?;:）)])/g, '$1')
+    .replace(/([（(])[ \t]+/g, '$1')
+    .replace(/(\S)[ \t]{2,}/g, '$1 ')
+    .replace(/[ \t]+$/gm, '')
+
 // 写进笔记、渲染之前都把标记抹掉，内容整段保留 —— 落盘时不再区分「库内 / 库外」
-export const stripMark = (v) => str(v).replace(MARK_RE, '').trim()
+export const stripMark = (v) => {
+  const s = str(v).replace(MARK_RE, '')
+  // 没出现编号就原样返回，免得动到别的正文排版
+  return (hasIdMark(s) ? tidyIds(s) : s).trim()
+}
 
 export const VALID = new Set([
   'paragraph',

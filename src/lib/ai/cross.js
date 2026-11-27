@@ -318,7 +318,7 @@ export function normalizePlan(data, notes) {
   for (const raw of arr(data && data.items)) {
     if (!raw || typeof raw !== 'object') continue
     const op = str(raw.op)
-    const why = str(raw.why)
+    const why = stripMark(str(raw.why))
     const base = { op, why, checked: !HEAVY.has(op), key: `${op}-${out.length}` }
 
     if (op === 'move') {
@@ -429,7 +429,8 @@ export async function planCross({ ids, question = '', cfg } = {}) {
   const data = pickJson(text)
   return {
     question: q,
-    answer: str(data && data.answer),
+    // 模型爱把 [#块id] 抄进总结里，块 id 是给 items 用的，正文里不该出现
+    answer: stripMark(str(data && data.answer)),
     items: normalizePlan(data, notes),
     notes: notes.map((n) => ({ id: n.id, title: n.title, path: pathName(n.topicId) })),
   }
@@ -544,5 +545,140 @@ export function undoCross(undo) {
     for (const id of arr(one.made)) removeNote(id)
   }
   for (const id of arr(u.restored)) restoreNote(id)
+}
+
+/* ---------- 改动流水 ---------- 
+   撤销快照不能只活在面板内存里：面板一关、或者切去笔记看一圈再回来，
+   组件重新挂载，内存里的快照就没了，想反悔都没处点。
+   这里把每次跨笔记写入连同「改之前」的快照一起存本机，历史里随时翻出来撤销。 */
+
+const RUN_KEY = 'myknowledge.cross.runs'
+const RUN_MAX = 12 // 历史最多留这么多次
+const RUN_UNDO_MAX = 5 // 只有最近几次带完整快照，再往前只留记录，省着点本机存储
+
+export const RUN_KIND = { plan: '清单写入', revise: '逐篇重构' }
+
+// 内容指纹：标题 + 各块文字折成一个短串，用来判断「这次改完之后，那篇有没有又被改过」
+const sig = (note) => {
+  const s = `${note.title}␟${(note.blocks || []).map((b) => blockText(b)).join('␟')}`
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return `${(h >>> 0).toString(36)}-${s.length}`
+}
+
+const slim = (lines) =>
+  arr(lines)
+    .map((s) =>
+      String(s || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 160),
+    )
+    .filter(Boolean)
+    .slice(0, 40)
+
+// 超量的老记录把快照丢掉、只留一行账：记录还能看，只是不能再撤
+const trimRuns = (list) => {
+  let alive = 0
+  return arr(list)
+    .slice(0, RUN_MAX)
+    .map((r) => {
+      if (!r || !r.id) return null
+      if (!r.undo || r.undoneAt) return r
+      alive += 1
+      return alive <= RUN_UNDO_MAX ? r : { ...r, undo: null, after: null }
+    })
+    .filter(Boolean)
+}
+
+function writeRuns(list) {
+  try {
+    localStorage.setItem(RUN_KEY, JSON.stringify(trimRuns(list)))
+  } catch {
+    // 存不下就把老快照全丢掉再试一次；流水记不住不该让写入本身失败
+    const lean = arr(list).map((r, i) => (i < 2 || !r ? r : { ...r, undo: null, after: null }))
+    try {
+      localStorage.setItem(RUN_KEY, JSON.stringify(trimRuns(lean)))
+    } catch {
+      /* 本机存储满了，这次历史就留不住 */
+    }
+  }
+}
+
+export function loadRuns() {
+  try {
+    const v = JSON.parse(localStorage.getItem(RUN_KEY) || '[]')
+    return Array.isArray(v) ? v.filter((r) => r && r.id) : []
+  } catch {
+    return []
+  }
+}
+
+// 记一次写入：调用前已经落库，这里补上「改之后」的指纹和涉及哪几篇
+export function logRun({ kind = 'plan', question = '', answer = '', lines = [], undo = null } = {}) {
+  const u = undo || {}
+  const after = {}
+  const notes = []
+  const any = (id) => state.notes.find((n) => n.id === id) || null
+  for (const one of arr(u.notes)) {
+    const n = liveNoteById(one.id)
+    if (n) {
+      after[n.id] = sig(n)
+      notes.push({ id: n.id, title: n.title })
+    }
+    for (const id of arr(one.made)) {
+      const nn = liveNoteById(id)
+      if (!nn) continue
+      after[nn.id] = sig(nn)
+      notes.push({ id: nn.id, title: nn.title, made: true })
+    }
+  }
+  // 并掉的篇这会儿已经在回收站里，得查全量
+  for (const id of arr(u.restored)) {
+    const n = any(id)
+    if (n) notes.push({ id: n.id, title: n.title, trashed: true })
+  }
+  const hasUndo = arr(u.notes).length + arr(u.restored).length > 0
+  const run = {
+    id: `cr-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+    at: new Date().toISOString(),
+    kind,
+    question: String(question || '').trim().slice(0, 200),
+    answer: String(answer || '').trim().slice(0, 1200),
+    lines: slim(lines),
+    notes,
+    after,
+    undo: hasUndo ? u : null,
+    undoneAt: null,
+  }
+  writeRuns([run, ...loadRuns()])
+  return run
+}
+
+// 撤销某一次：那几篇在这之后又被手改过的，先问一句再动手，别顺手把别的改动一起抹掉
+export function undoRun(id, { force = false } = {}) {
+  const list = loadRuns()
+  const run = list.find((r) => r.id === id)
+  if (!run) return { ok: false, reason: 'missing' }
+  if (run.undoneAt) return { ok: false, reason: 'done' }
+  if (!run.undo) return { ok: false, reason: 'gone' }
+  const changed = []
+  for (const [noteId, was] of Object.entries(run.after || {})) {
+    const n = liveNoteById(noteId)
+    if (n && sig(n) !== was) changed.push({ id: noteId, title: n.title })
+  }
+  if (changed.length && !force) return { ok: false, reason: 'changed', changed }
+  undoCross(run.undo)
+  writeRuns(
+    list.map((r) =>
+      r.id === id ? { ...r, undoneAt: new Date().toISOString(), undo: null, after: null } : r,
+    ),
+  )
+  return { ok: true, changed }
+}
+
+// 只删这条账，不动笔记
+export function forgetRun(id) {
+  writeRuns(loadRuns().filter((r) => r.id !== id))
 }
 

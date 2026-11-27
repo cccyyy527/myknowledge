@@ -1251,6 +1251,58 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .xg-plan-where { color: var(--ink-3); font-size: 11.5px; }
 .xg-plan-why { font-size: 11.5px; line-height: 1.55; color: var(--ink-3); word-break: break-word; }
 
+/* 跨笔记改动历史：存在本机，切去笔记再回来也还在 */
+.xg-runs {
+  margin-top: 12px; padding: 0 10px 6px;
+  border: 1px solid var(--line); border-radius: 9px;
+}
+.xg-runs > summary {
+  font-size: 11.5px; color: var(--ink-3); cursor: pointer; list-style: none;
+  user-select: none; padding: 9px 0 7px;
+}
+.xg-runs > summary::-webkit-details-marker { display: none; }
+.xg-runs > summary::before { content: '▸ '; }
+.xg-runs[open] > summary::before { content: '▾ '; }
+.xg-runs > summary:hover { color: var(--ink); }
+.xg-run { padding: 8px 0; border-top: 1px dashed var(--line); }
+.xg-run.gone { opacity: 0.55; }
+.xg-run-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.xg-run-kind {
+  padding: 0 6px; border-radius: 4px; font-size: 10.5px; line-height: 16px;
+  background: #eef0fb; color: #3f4a9c;
+}
+.xg-run-time { margin-right: auto; font-size: 11px; color: var(--ink-3); }
+.xg-run-tag {
+  padding: 0 6px; border: 0; border-radius: 4px; font-size: 10.5px; line-height: 16px;
+  background: #f2f1ee; color: var(--ink-3);
+}
+.xg-run-tag.flat { cursor: default; }
+.xg-run-undo {
+  padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px;
+  background: #fff; color: var(--ink-2); font-size: 11px; cursor: pointer;
+}
+.xg-run-undo:hover { border-color: var(--accent); color: var(--accent); }
+.xg-run-x {
+  padding: 3px 2px; border: 0; background: none; color: var(--ink-3);
+  font-size: 13px; line-height: 1; cursor: pointer;
+}
+.xg-run-x:hover { color: #b42318; }
+.xg-run-q { margin: 5px 0 0; font-size: 11.5px; color: var(--ink-3); word-break: break-word; }
+.xg-run-a {
+  margin: 4px 0 0; font-size: 12px; line-height: 1.65; color: var(--ink-2);
+  white-space: pre-wrap; word-break: break-word;
+}
+.xg-run-lines { margin: 5px 0 0; padding-left: 16px; }
+.xg-run-lines > li {
+  font-size: 11.5px; line-height: 1.6; color: var(--ink-2); word-break: break-word;
+}
+.xg-run-notes {
+  display: flex; gap: 5px; flex-wrap: wrap; align-items: center;
+  margin: 6px 0 0; font-size: 11px; color: var(--ink-3);
+}
+.xg-run-notes .xg-chip { font-size: 11px; }
+.xg-run-notes .xg-chip[disabled] { opacity: 0.5; cursor: default; }
+
 .xg-manual { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .xg-manual > summary {
   font-size: 11.5px; color: var(--ink-3); cursor: pointer; list-style: none;

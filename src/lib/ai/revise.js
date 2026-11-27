@@ -1,6 +1,6 @@
 // 整篇改写：先算一份结构诊断，模型只输出操作列表，落库前再按块 id 校验一遍
 
-import { newBlockId, state } from '../store.js'
+import { newBlockId, liveNoteById } from '../store.js'
 import { searchNotes, blockText } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks, assembleBlocks } from './schema.js'
@@ -153,7 +153,7 @@ export function relatedNotes(note, { limit = 5 } = {}) {
     .filter((x) => x.id !== note.id)
     .slice(0, limit)
     .map((x) => {
-      const full = state.notes.find((n) => n.id === x.id)
+      const full = liveNoteById(x.id)
       const bits = (full?.blocks || [])
         .filter((b) => b.type !== 'heading')
         .map((b) => blockText(b).replace(/\s+/g, ' ').trim())

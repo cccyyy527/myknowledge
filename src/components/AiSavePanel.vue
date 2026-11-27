@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { SECTIONS, stripMark } from '../lib/ai.js'
-import { state, liveNotes, flattenTopics, topicPath } from '../lib/store.js'
+import { state, liveNotes, liveNoteById, flattenTopics, topicPath } from '../lib/store.js'
 import { attachRefs, groupBySection, plainBlocks } from '../lib/draft.js'
 import BlockView from './BlockView.vue'
 
@@ -18,7 +18,7 @@ const groups = computed(() =>
 
 // 拿块的首句当标签，用来告诉用户「插在哪块后面」
 function labelOf(noteId, blockId) {
-  const note = state.notes.find((n) => n.id === noteId)
+  const note = liveNoteById(noteId)
   const b = note?.blocks?.find((x) => x.id === blockId)
   if (!b) return ''
   const raw = b.text || b.term || b.question || b.items?.[0] || b.latex || ''
@@ -50,7 +50,7 @@ const noteOptions = computed(() =>
   })),
 )
 
-const editingNote = computed(() => state.notes.find((n) => n.id === props.saving.noteId))
+const editingNote = computed(() => liveNoteById(props.saving.noteId))
 
 // 预览：有 AI 分块就按段落排，没有就退回一张问答卡
 const savingBlocks = computed(() => {
@@ -151,6 +151,20 @@ const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
           </option>
         </select>
       </label>
+      <label class="ai-pick">
+        <span>顺带换分类</span>
+        <select v-model="saving.moveTo">
+          <option value="">不换，留在 {{ pathOf(editingNote?.topicId) }}</option>
+          <optgroup v-for="g in groups" :key="g.domain.id" :label="g.domain.name">
+            <option v-for="r in g.rows" :key="r.topic.id" :value="r.topic.id">
+              {{ '　'.repeat(r.depth) }}{{ r.topic.name }}
+            </option>
+          </optgroup>
+        </select>
+      </label>
+      <p v-if="saving.moveTo" class="ask-save-path">
+        写完连这篇一起挪到 {{ pathOf(saving.moveTo) }}
+      </p>
       <template v-if="!saving.blocks?.length">
         <label class="ai-pick">
           <span>加到这段</span>

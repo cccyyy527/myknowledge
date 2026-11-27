@@ -9,11 +9,15 @@ import {
   createNote,
   newBlockId,
   flattenTopics,
+  idifyBlocks,
   insertBlocks,
+  liveNoteById,
+  liveNotes,
+  moveNote,
   touchNote,
 } from '../lib/store.js'
 import AiSavePanel from './AiSavePanel.vue'
-import { normTitle } from '../lib/links.js'
+import { resolveLink } from '../lib/links.js'
 
 const emit = defineEmits(['close', 'setup'])
 const router = useRouter()
@@ -277,11 +281,15 @@ const rich = (text, used = []) => {
     return `<button class="ask-cite" data-note="${used[n - 1].id}">${n}</button>`
   })
   return s.replace(/\u0000(\d+)\u0000/g, (_m, i) => {
-    const t = links[Number(i)] || ''
-    const hit = state.notes.find((n) => normTitle(n.title) === normTitle(t))
+    const raw = links[Number(i)] || ''
+    const cut = raw.indexOf('|')
+    const target = (cut < 0 ? raw : raw.slice(0, cut)).trim()
+    const display = cut < 0 ? '' : raw.slice(cut + 1).trim()
+    const hit = resolveLink({ target, display }, liveNotes())
+    const label = display || (hit ? hit.title : target)
     return hit
-      ? `<button class="ask-link" data-note="${hit.id}" title="跳到《${esc(hit.title)}》">${esc(t)}</button>`
-      : `<span class="ask-link missing" title="库里还没有这篇">${esc(t)}</span>`
+      ? `<button class="ask-link" data-note="${hit.id}" title="跳到《${esc(hit.title)}》">${esc(label)}</button>`
+      : `<span class="ask-link missing" title="库里还没有这篇">${esc(label)}</span>`
   })
 }
 
@@ -335,15 +343,16 @@ const applyProposal = (s, r) => {
 }
 
 const blankSaving = (t) => {
-  const srcNote = t.used[0] && state.notes.find((n) => n.id === t.used[0].id)
+  const srcNote = t.used[0] && liveNoteById(t.used[0].id)
   const anyTopic = flattenTopics(state.domains[0]?.id, true)[0]?.topic?.id || ''
   return {
     idx: null,
     mode: 'new',
     topicId: srcNote?.topicId || anyTopic,
-    noteId: srcNote?.id || state.notes[0]?.id || '',
+    noteId: srcNote?.id || liveNotes()[0]?.id || '',
     section: 'qa',
     title: blankTitle(t.q),
+    moveTo: '',
     blocks: null,
     edits: [],
     plan: null,
@@ -425,7 +434,7 @@ const doSave = () => {
   const clean = (list) => cleanBlocks(list, newBlockId)
 
   if (s.mode === 'edit') {
-    const note = state.notes.find((n) => n.id === s.noteId)
+    const note = liveNoteById(s.noteId)
     if (!note || !s.plan?.length) return
     note.blocks = s.plan
     touchNote(note)
@@ -436,7 +445,7 @@ const doSave = () => {
   }
 
   if (s.mode === 'exist') {
-    const note = state.notes.find((n) => n.id === s.noteId)
+    const note = liveNoteById(s.noteId)
     if (!note) return
     if (ai) {
       // AI 已经把每块归好段了，按段落分别拼进去
@@ -449,6 +458,7 @@ const doSave = () => {
       insertBlocks(note, sec.title, clean(body))
     }
     touchNote(note)
+    if (s.moveTo && s.moveTo !== note.topicId) moveNote(note.id, s.moveTo)
     saving.value = null
     emit('close')
     router.push(`/n/${note.id}`)
@@ -458,7 +468,7 @@ const doSave = () => {
   if (!s.topicId) return
   const note = createNote(s.topicId)
   note.title = (s.title || '').trim() || blankTitle(t.q)
-  note.blocks = clean(ai ? assembleBlocks(ai) : body)
+  note.blocks = idifyBlocks(clean(ai ? assembleBlocks(ai) : body))
   saving.value = null
   emit('close')
   router.push(`/n/${note.id}`)

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import katex from 'katex'
+import { ready as mathReady, loadMath, renderMath } from '../lib/math.js'
 import { loadAI, isAiReady, ocrImage } from '../lib/ai.js'
 
 const props = defineProps({
@@ -23,11 +23,8 @@ const from = ref('')
 const math = computed(() => {
   const latex = result.value?.latex
   if (!latex) return ''
-  try {
-    return katex.renderToString(latex, { displayMode: true, throwOnError: false })
-  } catch {
-    return ''
-  }
+  if (!mathReady.value) loadMath()
+  return renderMath(latex, { displayMode: true, throwOnError: false })
 })
 
 const reset = () => {

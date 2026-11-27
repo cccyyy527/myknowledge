@@ -76,6 +76,9 @@ export const noteById = (id) => state.notes.find((n) => n.id === id)
 
 export const liveNotes = () => state.notes.filter((n) => !n.deletedAt)
 
+// 回收站里的笔记也算「这篇存在」，只是不该被 AI 读写；要区分「没有」和「在回收站」
+export const liveNoteById = (id) => state.notes.find((n) => n.id === id && !n.deletedAt)
+
 export const trashedNotes = () =>
   state.notes
     .filter((n) => n.deletedAt)
@@ -329,16 +332,23 @@ function templateBlocks() {
 
 export const newBlockId = () => 'b-' + Math.random().toString(36).slice(2, 10)
 
-// 把若干块塞到某个段落末尾；没有这一段就在文末新起一段
-// AI / 模板写进来的块里带的还是 [[标题]]，落库前先换成 [[id]]，省得以后改名断链
-export function insertBlocks(note, sectionTitle, blocks) {
-  if (!note || !blocks || !blocks.length) return
+// 把块里的 [[标题]] 换成 [[id]]：AI 生成的内容一律走这里，别直接塞进 note.blocks，
+// 否则改名之后这些引用会静默断掉
+export function idifyBlocks(blocks) {
+  if (!blocks || !blocks.length) return blocks
   const byTitle = titleIndex(liveNotes())
   for (const b of blocks) {
     for (const f of LINK_FIELDS[b.type] || []) {
       if (b[f]) b[f] = idifyText(b[f], byTitle)
     }
   }
+  return blocks
+}
+
+// 把若干块塞到某个段落末尾；没有这一段就在文末新起一段
+export function insertBlocks(note, sectionTitle, blocks) {
+  if (!note || !blocks || !blocks.length) return
+  idifyBlocks(blocks)
   const arr = note.blocks
   const hit = arr.findIndex(
     (b) => b.type === 'heading' && b.level === 2 && b.text === sectionTitle,

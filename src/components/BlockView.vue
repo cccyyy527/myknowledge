@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import katex from 'katex'
+import { ready as mathReady, loadMath, renderMath } from '../lib/math.js'
 import { liveNotes } from '../lib/store.js'
 import { canCreate, isWholeCard, linkLabel, resolveLink } from '../lib/links.js'
 
@@ -20,14 +20,8 @@ watch(
 
 const html = computed(() => {
   if (props.block.type !== 'formula') return ''
-  try {
-    return katex.renderToString(props.block.latex || '', {
-      displayMode: true,
-      throwOnError: false,
-    })
-  } catch {
-    return ''
-  }
+  if (!mathReady.value) loadMath()
+  return renderMath(props.block.latex, { displayMode: true, throwOnError: false })
 })
 
 const esc = (s) =>

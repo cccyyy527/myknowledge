@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { state, createNote, topicPath, flattenTopics } from '../lib/store.js'
+import { state, createNote, idifyBlocks, topicPath, flattenTopics } from '../lib/store.js'
 import { loadAI, saveAI, clearAI, isAiReady, composeNote, assembleBlocks, ping, SKILLS, loadSkillOff, saveSkillOff, loadSkillPref, saveSkillPref } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
 import AiAsk from './AiAsk.vue'
@@ -72,7 +72,7 @@ const writeNote = () => {
   if (!result.value || !picked.value) return
   const note = createNote(picked.value)
   note.title = result.value.title
-  note.blocks = assembleBlocks(result.value.blocks)
+  note.blocks = idifyBlocks(assembleBlocks(result.value.blocks))
   emit('close')
   router.push(`/n/${note.id}`)
 }

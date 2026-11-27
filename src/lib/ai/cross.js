@@ -1,6 +1,6 @@
 // 跨笔记：把一组笔记揉成一篇新的（原篇一块都不动），或者只读地查它们之间的说法冲突
 
-import { state } from '../store.js'
+import { state, liveNoteById } from '../store.js'
 import { noteText } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
 import { BLOCK_SPEC, SECTION_SPEC, str, arr, normalizeBlocks } from './schema.js'
@@ -12,7 +12,7 @@ const BUDGET = 5000 // 每篇塞进 prompt 的字数上限，几篇加起来别�
 
 const pickNotes = (ids) =>
   arr(ids)
-    .map((id) => state.notes.find((n) => n.id === id))
+    .map((id) => liveNoteById(id))
     .filter(Boolean)
     .slice(0, MAX_NOTES)
 

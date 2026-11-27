@@ -1012,12 +1012,25 @@ code { font-family: var(--mono); font-size: 0.9em; }
 
 /* 跨笔记：选篇 + 一致性检查结果 */
 .ai-cross { min-height: 0; }
+.xg-search-row { display: flex; gap: 6px; align-items: flex-start; }
 .xg-search {
-  width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 6px 10px;
+  flex: 1 1 auto; min-width: 0; box-sizing: border-box; margin: 0 0 8px; padding: 6px 10px;
   font-size: 12.5px; font-family: inherit; color: var(--ink);
   border: 1px solid var(--line); border-radius: 8px; background: #fff;
 }
 .xg-search:focus { outline: none; border-color: var(--accent); }
+.xg-auto {
+  flex: none; margin: 0 0 8px; padding: 6px 10px;
+  font-size: 12px; font-family: inherit; color: var(--ink-2); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff;
+}
+.xg-auto:hover { color: var(--ink); border-color: var(--accent); }
+/* 整合预览：逐块勾选，只写勾中的 */
+.xg-block { display: flex; gap: 6px; align-items: flex-start; padding: 2px 0; }
+.xg-keep { flex: none; padding-top: 4px; cursor: pointer; }
+.xg-keep input { cursor: pointer; }
+.xg-block-body { flex: 1 1 auto; min-width: 0; }
+.xg-block.off .xg-block-body { opacity: 0.35; text-decoration: line-through; }
 .xg-list {
   display: flex; flex-direction: column; gap: 2px;
   max-height: 34vh; overflow: auto; padding: 4px;

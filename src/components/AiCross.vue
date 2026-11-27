@@ -1,7 +1,14 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { liveNotes, createNote, topicPath, flattenTopics } from '../lib/store.js'
+import {
+  state,
+  liveNotes,
+  createNote,
+  idifyBlocks,
+  topicPath,
+  flattenTopics,
+} from '../lib/store.js'
 import {
   loadAI,
   isAiReady,
@@ -11,6 +18,7 @@ import {
   stripMark,
 } from '../lib/ai.js'
 import BlockView from './BlockView.vue'
+import { searchNotes } from '../lib/retrieve.js'
 
 const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close', 'written'])
@@ -61,17 +69,14 @@ const byUpdated = (a, b) =>
 const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '未归类')
 
 const list = computed(() => {
-  const kw = q.value.trim().toLowerCase()
+  const kw = q.value.trim()
   const all = [...liveNotes()].sort(byUpdated)
   if (!kw) return all.slice(0, 60)
-  return all
-    .filter((n) =>
-      [n.title, ...(n.tags || []), pathOf(n.topicId)]
-        .join(' ')
-        .toLowerCase()
-        .includes(kw),
-    )
-    .slice(0, 60)
+  // 复用检索层打分：标题、分类、标签、正文一起看，中文按二元组切
+  const byId = new Map(all.map((n) => [n.id, n]))
+  return searchNotes(kw, { limit: 60 })
+    .map((h) => byId.get(h.id))
+    .filter(Boolean)
 })
 
 const count = (n) => (n.blocks || []).filter((b) => b.type !== 'heading' && b.type).length
@@ -91,6 +96,25 @@ const unpick = (id) => {
 
 const pickedNotes = computed(() => ids.value.map((id) => liveNotes().find((n) => n.id === id)).filter(Boolean))
 
+// 本地检索按打分取前几篇，直接勾上——纯前端算，不花 token
+const autoPick = () => {
+  const probe = (q.value || extra.value).trim()
+  if (!probe) return say('先在上面搜个主题，或者写一句额外要求，我按它挑', true)
+  const hits = searchNotes(probe, { limit: MAX })
+  if (!hits.length) return say(`「${probe}」没检索到相关笔记，换个说法再试`, true)
+  ids.value = hits.map((h) => h.id)
+  say(`按「${probe}」挑了 ${hits.length} 篇：${hits.map((h) => h.title).join('、')}`)
+}
+
+// 整合结果里哪些块不要：预览逐块勾选，写入时只收勾中的
+const off = ref([])
+const kept = (b) => !off.value.includes(b.id)
+const toggleBlock = (id) => {
+  const at = off.value.indexOf(id)
+  if (at >= 0) off.value.splice(at, 1)
+  else off.value.push(id)
+}
+
 const runMerge = async () => {
   if (ids.value.length < 2) return say('先勾两篇以上', true)
   if (!ready.value) return say('还没配 API Key，去「设置」填一下', true)
@@ -101,6 +125,7 @@ const runMerge = async () => {
   try {
     const r = await mergeNotes({ ids: ids.value, instruction: extra.value, cfg: cfg.value })
     merged.value = { ...r, title: r.title, topicId: r.topicId }
+    off.value = []
     if (!r.blocks.length) say('模型没切出有效内容，换个组合再试', true)
   } catch (e) {
     say(String(e.message || e), true)
@@ -136,10 +161,13 @@ const jump = (id) => {
 const write = () => {
   const m = merged.value
   if (!m || !m.topicId) return
+  const keep = m.blocks.filter(kept)
+  if (!keep.length) return say('一块都没勾，没什么可写的', true)
   const note = createNote(m.topicId)
   note.title = stripMark(m.title || '').trim() || '整合笔记'
-  note.blocks = assembleBlocks(m.blocks)
+  note.blocks = idifyBlocks(assembleBlocks(keep))
   merged.value = null
+  off.value = []
   emit('written', note.id)
   emit('close')
   router.push(`/n/${note.id}`)
@@ -155,7 +183,12 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
       查完什么都不写。<strong>原篇不会被覆盖，放心点。</strong>
     </p>
 
-    <input v-model="q" class="xg-search" placeholder="搜标题 / 标签 / 分类" />
+    <div class="xg-search-row">
+      <input v-model="q" class="xg-search" placeholder="搜标题 / 标签 / 分类 / 正文" />
+      <button class="xg-auto" title="按这个关键词本地检索，把最相关的几篇直接勾上" @click="autoPick">
+        自动挑
+      </button>
+    </div>
 
     <div class="xg-list">
       <button
@@ -251,11 +284,20 @@ const KIND = { conflict: '矛盾', dupe: '重复', gap: '缺环' }
       </div>
 
       <div class="ai-preview">
-        <BlockView v-for="b in merged.blocks" :key="b.id" :block="b" />
+        <div v-for="b in merged.blocks" :key="b.id" class="xg-block" :class="{ off: !kept(b) }">
+          <label class="xg-keep" :title="kept(b) ? '不想要这块就取消勾选' : '已排除，不会写入'">
+            <input type="checkbox" :checked="kept(b)" @change="toggleBlock(b.id)" />
+          </label>
+          <div class="xg-block-body">
+            <BlockView :block="b" />
+          </div>
+        </div>
       </div>
 
       <div class="ai-acts">
-        <button class="ai-primary" @click="write">写入新笔记</button>
+        <button class="ai-primary" @click="write">
+          写入新笔记（{{ merged.blocks.filter(kept).length }} 块）
+        </button>
         <button @click="merged = null">放弃</button>
       </div>
     </template>

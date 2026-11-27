@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import katex from 'katex'
+import { ready as mathReady, loadMath, renderMath } from '../lib/math.js'
 import OcrDialog from './OcrDialog.vue'
 import { liveNotes } from '../lib/store.js'
 import { normTitle } from '../lib/links.js'
@@ -14,11 +14,8 @@ const emit = defineEmits(['remove', 'move', 'ai', 'insert', 'insertBefore'])
 
 const preview = computed(() => {
   if (props.block.type !== 'formula' || !props.block.latex) return ''
-  try {
-    return katex.renderToString(props.block.latex, { displayMode: true, throwOnError: false })
-  } catch {
-    return ''
-  }
+  if (!mathReady.value) loadMath()
+  return renderMath(props.block.latex, { displayMode: true, throwOnError: false })
 })
 
 /* ---------- 多行输入框跟着内容长高，框里不要再上下滚 ---------- */

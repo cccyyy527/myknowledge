@@ -1,6 +1,6 @@
 // L3.5 agent：模型自己查、自己读、自己决定归档
 
-import { state } from '../store.js'
+import { liveNoteById } from '../store.js'
 import { searchNotes, noteText, noteIsEmpty } from '../retrieve.js'
 import { loadAI, isAiReady, chatStreamTools } from './client.js'
 import { SECTIONS, str, normalizeBlocks, stripMark, OUTSIDE_MARK } from './schema.js'
@@ -187,7 +187,7 @@ function runTool(ctx, call) {
       }
     }
     const lines = hits.map((h) => {
-      const n = citeIndex(ctx, state.notes.find((x) => x.id === h.id) || h)
+      const n = citeIndex(ctx, liveNoteById(h.id) || h)
       const flags = h.empty ? '｜空笔记（只有小节标题，没有正文）' : h.lead ? `｜开头：${h.lead}` : ''
       const tags = h.tags.length ? `｜标签：${h.tags.join('、')}` : ''
       return `[${n}] 《${h.title}》（id: ${h.id}）｜位置：${h.path}${flags}${tags}`
@@ -199,7 +199,7 @@ function runTool(ctx, call) {
   }
 
   if (name === 'read_note') {
-    const note = state.notes.find((x) => x.id === str(args.id))
+    const note = liveNoteById(str(args.id))
     if (!note) {
       return { content: `没有 id 为 ${str(args.id)} 的笔记，用 search_notes 重新查。`, summary: '📖 读不到（id 不对）' }
     }
@@ -216,7 +216,7 @@ function runTool(ctx, call) {
   }
 
   if (name === 'save_note') {
-    const note = state.notes.find((x) => x.id === str(args.noteId))
+    const note = liveNoteById(str(args.noteId))
 
     // 改已有块：模型必须拿 read_note 给的块 id 当靶子，对不上的直接丢掉
     if (args.mode === 'edit') {
@@ -258,7 +258,7 @@ function runTool(ctx, call) {
         summary: '🗂 提案无效（blocks 为空）',
       }
     }
-    const oldNote = state.notes.find((x) => x.id === str(args.noteId))
+    const oldNote = liveNoteById(str(args.noteId))
     const mode = args.mode === 'exist' && oldNote ? 'exist' : 'new'
     const topicId = mode === 'exist' ? oldNote.topicId : topicExists(args.topicId) ? args.topicId : fallbackTopicId()
     ctx.proposal = {

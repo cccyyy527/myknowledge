@@ -347,6 +347,35 @@ export function trimThread(list, max) {
   return [list[0], list[1], ...list.slice(cut)]
 }
 
+// 一轮跑完交给下一轮的线程：工具调用留下的 tool_calls / tool 消息里没有 reasoning_content，
+// 用户下次开着思考接着聊就会被 DeepSeek 400 拒掉。工具结果本身就是人话，压成一句接在
+// 模型的回答后面，线程就成了纯对话 —— 思考开关怎么切都不炸，模型照样知道自己动过哪块
+export function settleThread(list) {
+  const t = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v)).trim()
+  const out = []
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i]
+    if (m.role === 'tool') continue
+    if (m.role !== 'assistant') {
+      out.push({ ...m })
+      continue
+    }
+    if (!m.tool_calls?.length) {
+      out.push({ role: 'assistant', content: m.content })
+      continue
+    }
+    const acts = []
+    for (let j = i + 1; j < list.length && list[j].role === 'tool'; j++) {
+      const one = t(list[j].content)
+      if (one) acts.push(one)
+    }
+    const said = t(m.content)
+    const did = acts.length ? `（这轮我调了工具：${acts.join('；')}）` : ''
+    out.push({ role: 'assistant', content: [said, did].filter(Boolean).join('\n\n') || '（这轮没动）' })
+  }
+  return out
+}
+
 // 带 tools 的流式请求：正文边收边显示，顺带把 tool_calls 拼起来
 export function chatStreamTools(
   messages,

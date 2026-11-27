@@ -128,7 +128,45 @@ export const stripSection = (b) => {
   return rest
 }
 
-// 把块按段落拼成一条完整的 blocks 序列（含 heading），用于新建笔记
+/* ---------- 工具参数：给模型的 function schema ---------- */
+
+export const SEC_IDS = SECTIONS.map((s) => s.id)
+export const secTitle = (id) => (SECTIONS.find((s) => s.id === id) || SECTIONS[0]).title
+export const secOk = (v) => (SEC_IDS.includes(str(v)) ? str(v) : '')
+
+// 与 BLOCK_SPEC 一一对应：这里只列字段名，怎么填靠 system 里那段说明
+export const BLOCK_ARG = {
+  type: 'object',
+  description: '改完的块内容：type 必填，其余字段按块类型规范给',
+  properties: {
+    type: { type: 'string', enum: [...VALID] },
+    text: { type: 'string' },
+    term: { type: 'string' },
+    detail: { type: 'string' },
+    latex: { type: 'string' },
+    left: { type: 'string' },
+    right: { type: 'string' },
+    rows: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { k: { type: 'string' }, a: { type: 'string' }, b: { type: 'string' } },
+      },
+    },
+    question: { type: 'string' },
+    answer: { type: 'string' },
+    cause: { type: 'string' },
+    avoid: { type: 'string' },
+    items: { type: 'array', items: { type: 'string' } },
+    tone: { type: 'string', enum: ['tip', 'warn'] },
+  },
+  required: ['type'],
+}
+
+export const AFTER_ARG = { type: 'string', description: '插到哪一块后面（块 id）；省略就排在该小节末尾' }
+export const OUTSIDE_ARG = { type: 'boolean', description: '这块用了笔记之外的知识才填 true' }
+
+/* ---------- 把块按段落拼成一条完整的 blocks 序列（含 heading），用于新建笔记 ---------- */
 export function assembleBlocks(blocks) {
   let i = 0
   const hid = () => `b-h-${Date.now().toString(36)}-${++i}`

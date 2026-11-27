@@ -2,8 +2,23 @@
 
 import { newBlockId, liveNoteById } from '../store.js'
 import { searchNotes, blockText } from '../retrieve.js'
-import { chatStreamTools, loadAI, thinkOn, trimThread } from './client.js'
-import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, VALID, str, arr, normalizeBlocks, assembleBlocks, stripMark } from './schema.js'
+import { chatStreamTools, loadAI, thinkOn, trimThread, settleThread } from './client.js'
+import {
+  SECTIONS,
+  BLOCK_SPEC,
+  SECTION_SPEC,
+  str,
+  arr,
+  normalizeBlocks,
+  assembleBlocks,
+  stripMark,
+  SEC_IDS,
+  secTitle,
+  secOk,
+  BLOCK_ARG,
+  AFTER_ARG,
+  OUTSIDE_ARG,
+} from './schema.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 
@@ -211,42 +226,6 @@ ${outside ? `- 用户允许你用笔记之外的知识补内容。笔记里没�
 
 // 轮数给足：一篇笔记动十来处很正常；给不够它就会半途收工
 const MAX_REVISE_ROUNDS = 24
-
-const SEC_IDS = SECTIONS.map((s) => s.id)
-const secTitle = (id) => (SECTIONS.find((s) => s.id === id) || SECTIONS[0]).title
-const secOk = (v) => (SEC_IDS.includes(str(v)) ? str(v) : '')
-
-// 与 BLOCK_SPEC 一一对应：这里只列字段名，怎么填靠 system 里那段说明
-const BLOCK_ARG = {
-  type: 'object',
-  description: '改完的块内容：type 必填，其余字段按块类型规范给',
-  properties: {
-    type: { type: 'string', enum: [...VALID] },
-    text: { type: 'string' },
-    term: { type: 'string' },
-    detail: { type: 'string' },
-    latex: { type: 'string' },
-    left: { type: 'string' },
-    right: { type: 'string' },
-    rows: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: { k: { type: 'string' }, a: { type: 'string' }, b: { type: 'string' } },
-      },
-    },
-    question: { type: 'string' },
-    answer: { type: 'string' },
-    cause: { type: 'string' },
-    avoid: { type: 'string' },
-    items: { type: 'array', items: { type: 'string' } },
-    tone: { type: 'string', enum: ['tip', 'warn'] },
-  },
-  required: ['type'],
-}
-
-const AFTER_ARG = { type: 'string', description: '插到哪一块后面（块 id）；省略就排在该小节末尾' }
-const OUTSIDE_ARG = { type: 'boolean', description: '这块用了笔记之外的知识才填 true' }
 
 function reviseTools(allowSplit) {
   const list = [
@@ -503,34 +482,6 @@ const planToOps = (ctx) => [
 
 // 对话线程别无限长：超过这么多条就从最早的一轮用户消息处切（system + 开场快照永远留着）
 const MAX_THREAD = 26
-
-// 一轮跑完交给下一轮的线程：工具调用留下的 tool_calls / tool 消息里没有 reasoning_content，
-// 用户下次开着思考接着聊就会被 DeepSeek 400 拒掉。工具结果本身就是人话，压成一句接在
-// 模型的回答后面，线程就成了纯对话 —— 思考开关怎么切都不炸，模型照样知道自己动过哪块
-function settleThread(list) {
-  const out = []
-  for (let i = 0; i < list.length; i++) {
-    const m = list[i]
-    if (m.role === 'tool') continue
-    if (m.role !== 'assistant') {
-      out.push({ ...m })
-      continue
-    }
-    if (!m.tool_calls?.length) {
-      out.push({ role: 'assistant', content: m.content })
-      continue
-    }
-    const acts = []
-    for (let j = i + 1; j < list.length && list[j].role === 'tool'; j++) {
-      const one = str(list[j].content).trim()
-      if (one) acts.push(one)
-    }
-    const said = str(m.content).trim()
-    const did = acts.length ? `（这轮我调了工具：${acts.join('；')}）` : ''
-    out.push({ role: 'assistant', content: [said, did].filter(Boolean).join('\n\n') || '（这轮没动）' })
-  }
-  return out
-}
 
 export async function reviseNote({
   note,

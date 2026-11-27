@@ -94,11 +94,16 @@ const turn = async ({ act, text, question = '' }) => {
       messages: thread.value,
       blocks: before?.blocks,
       mode: keepMode,
+      onStep: (step) => stepChat(step, true),
       onNoThinking: () => (noticed.value = true),
     })
     thread.value = r.messages || []
-    draft.value = { action: keepAct, mode: r.mode, blocks: r.blocks }
-    const head = r.say || `${r.mode === 'replace' ? '改写' : '补'}好了 ${r.blocks.length} 块。`
+    const n = r.blocks.length
+    // 一块都没给：要么只是答了一句话（insert 模式，原稿不动，保持上一版），要么是把原块整块删掉
+    if (n || r.mode !== 'insert') draft.value = { action: keepAct, mode: r.mode, blocks: r.blocks }
+    const head =
+      r.say ||
+      (n ? `${r.mode === 'replace' ? '改写' : '补'}好了 ${n} 块。` : '这轮没动块，只答了话。')
     stepChat(noticed.value ? `${head}（这次思考把额度吃光了，已自动关掉深度思考重跑）` : head)
   } catch (e) {
     stepChat(`出错了：${String(e.message || e)}`)
@@ -185,9 +190,15 @@ const apply = () => {
       <p v-if="msg" class="ai-msg" :class="{ bad }">{{ msg }}</p>
 
       <template v-if="draft">
-        <p class="ai-hint">
+        <p v-if="!draft.blocks.length && draft.mode === 'replace'" class="ai-hint">
+          预览（0 块）→ 点「采用」会把这一块整块删掉
+        </p>
+        <p v-else class="ai-hint">
           预览（{{ draft.blocks.length }} 块）→ 点「采用」才会写进笔记，
-          <template v-if="draft.mode === 'insert'">会插到这一块后面</template>
+          <template v-if="draft.mode === 'insert'">
+            <template v-if="draft.action?.target">会加到「{{ draft.action.target }}」这一节的末尾</template>
+            <template v-else>会插到这一块后面</template>
+          </template>
           <template v-else>会替换现在这一块</template>
         </p>
         <div class="ai-preview">

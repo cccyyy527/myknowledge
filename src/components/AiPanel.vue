@@ -217,7 +217,7 @@ const saveExtra = () => {
         </label>
         <label class="ai-row">
           <span>模型</span>
-          <input v-model.trim="cfg.model" placeholder="deepseek-chat" />
+          <input v-model.trim="cfg.model" placeholder="deepseek-flash" />
         </label>
         <label class="ai-row">
           <span>API Key</span>
@@ -225,7 +225,8 @@ const saveExtra = () => {
         </label>
 
         <p class="ai-hint">
-          常用组合：DeepSeek 用 <code>https://api.deepseek.com</code> + <code>deepseek-chat</code>；OpenAI 用
+          常用组合：DeepSeek 用 <code>https://api.deepseek.com</code> + <code>deepseek-flash</code>（便宜，够用），
+          要更强的推理换 <code>deepseek-v4-pro</code>（约贵 4 倍）；OpenAI 用
           <code>https://api.openai.com/v1</code> + <code>gpt-4o-mini</code>。地址结尾会自动补
           <code>/chat/completions</code>。
         </p>

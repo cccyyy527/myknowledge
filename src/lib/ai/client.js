@@ -6,7 +6,7 @@ const CFG_KEY = 'myknowledge.ai'
 
 export const DEFAULT_AI = {
   base: 'https://api.deepseek.com',
-  model: 'deepseek-chat',
+  model: 'deepseek-flash',
   key: '',
 }
 
@@ -142,6 +142,20 @@ async function readSse(res, onData) {
   }
 }
 
+// 会先思考的模型（V4 Flash 这类）把预算花在思考上时，content 会是空的。
+// 只报「没有返回内容」等于把线索全扔了，这里按 finish_reason 说清到底为什么空。
+function noContent({ finish, reasoningChars = 0, maxTokens } = {}) {
+  const used = reasoningChars ? `，其中 ${reasoningChars} 字花在思考过程上` : ''
+  if (finish === 'length')
+    return `模型没有返回内容：输出撞到长度上限（max_tokens=${maxTokens ?? '?'}）${used}，把上限调大或让它少写点`
+  if (finish === 'content_filter') return '模型没有返回内容：这次输出被判成敏感内容拦掉了，换个问法试试'
+  if (finish === 'insufficient_system_resource')
+    return '模型没有返回内容：服务端资源不足，等一会儿重试'
+  if (reasoningChars)
+    return `模型没有返回内容：只输出了思考过程${used}，没轮到正式回答，重试一次通常就好`
+  return '模型没有返回内容：这个模型名可能不支持当前调用方式（比如不支持流式或 tools），换个模型试试'
+}
+
 export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signal } = {}) {
   return request(
     cfg,
@@ -149,8 +163,17 @@ export function chat(messages, { cfg, temperature = 0.3, maxTokens = 3000, signa
     { signal },
     async (res) => {
       const json = await res.json()
-      const text = json?.choices?.[0]?.message?.content
-      if (!text) throw new Error('模型没有返回内容')
+      const choice = json?.choices?.[0]
+      const text = choice?.message?.content
+      if (!text) {
+        throw new Error(
+          noContent({
+            finish: choice?.finish_reason,
+            reasoningChars: (choice?.message?.reasoning_content || '').length,
+            maxTokens,
+          }),
+        )
+      }
       return text
     },
   )
@@ -162,18 +185,23 @@ export function chatStream(
   { cfg, temperature = 0.3, maxTokens = 2000, onDelta, signal } = {},
 ) {
   let full = ''
+  let finish = ''
+  let reasoningChars = 0
   return request(
     cfg,
     { messages, temperature, max_tokens: maxTokens, stream: true },
     { signal },
     async (res) => {
       await readSse(res, (j) => {
-        const delta = j?.choices?.[0]?.delta?.content || ''
+        const ch = j?.choices?.[0]
+        if (ch?.finish_reason) finish = ch.finish_reason
+        if (ch?.delta?.reasoning_content) reasoningChars += ch.delta.reasoning_content.length
+        const delta = ch?.delta?.content || ''
         if (!delta) return
         full += delta
         onDelta && onDelta(delta, full)
       })
-      if (!full) throw new Error('模型没有返回内容')
+      if (!full) throw new Error(noContent({ finish, reasoningChars, maxTokens }))
       return full
     },
   )
@@ -205,7 +233,7 @@ export async function ping(cfg) {
       { role: 'system', content: '只回复 ok' },
       { role: 'user', content: 'ping' },
     ],
-    { cfg, temperature: 0, maxTokens: 8 },
+    { cfg, temperature: 0, maxTokens: 512 },
   )
   return text.trim()
 }
@@ -222,10 +250,15 @@ export function chatStreamTools(
   }
   const calls = []
   let full = ''
+  let finish = ''
+  let reasoningChars = 0
   return request(cfg, body, { signal }, async (res) => {
     await readSse(res, (j) => {
-      const delta = j?.choices?.[0]?.delta
+      const ch = j?.choices?.[0]
+      if (ch?.finish_reason) finish = ch.finish_reason
+      const delta = ch?.delta
       if (!delta) return
+      if (delta.reasoning_content) reasoningChars += delta.reasoning_content.length
       if (delta.content) {
         full += delta.content
         onDelta && onDelta(delta.content, full)
@@ -243,6 +276,8 @@ export function chatStreamTools(
       .filter(Boolean)
       .filter((x) => x.function.name)
       .map((x, i) => ({ ...x, id: x.id || `call_${Date.now().toString(36)}_${i}` }))
+    // 一句话没给、工具也没调，这一轮就是空的：早点说清原因，别让 agent 白转到第 6 轮
+    if (!full && !toolCalls.length) throw new Error(noContent({ finish, reasoningChars, maxTokens }))
     return { text: full, toolCalls }
   }).catch((e) => {
     // 端点压根不认 tools / functions 时才值得退回预检索流程：只认 4xx 里明确提到 tools 的报错，

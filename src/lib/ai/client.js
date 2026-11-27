@@ -102,22 +102,37 @@ function thinkingOf(c) {
 
 // 思考过程（reasoning_content）也算在 max_tokens 里：开了思考还要原来的正文额度，
 // 就得另给思考留一份，否则它想完就没地方写正文了 —— 那正是「开了思考就不出内容」的原因。
-const THINK_EXTRA = 4096
+// 这份额度给足：思考多花的是它自己的时间，正文额度被挤掉才是真丢内容。
+const THINK_EXTRA = 8192
 
 export const thinkOn = (c) => c?.thinking === 'on' && /deepseek\.com/i.test(c.base || '')
 
-// 只在真开思考时加预算，关着的时候行为和以前完全一样
-// 上限 8192 是 deepseek 单次输出的天花板，超了直接 400，所以加完要收一下
-const THINK_CAP = 8192
+// 只在真开思考时加预算，关着的时候行为和以前完全一样。
+// 各家模型能接受的单次输出上限不一样、还会随模型升级变，所以不把它钉死：发高了服务端会 400
+// 并在报错里写明合法区间，request 会照着降下来并记住（见 outputCap）
+const THINK_CAP = 16384
 const budgetOf = (maxTokens, cfg) =>
   thinkOn(cfg || loadAI()) ? Math.min(maxTokens + THINK_EXTRA, THINK_CAP) : maxTokens
+
+// 服务端报错里写着「max_tokens 的合法区间是 [1, N]」，N 就是它真能接受的上限
+let outputCap = 0
+const capFrom = (msg) => {
+  const m = /max_tokens[^[]*\[\s*\d+\s*,\s*(\d+)\s*\]/i.exec(msg || '')
+  return m ? Number(m[1]) : 0
+}
 
 // 所有请求都走这里：端点 / 鉴权 / 超时 / 取消只管一份，read 负责把 response 读成值
 async function request(cfg, body, { signal, timeoutMs, retry = 1 } = {}, read) {
   const c = cfg || loadAI()
   if (!isAiReady(c)) throw new Error('还没填 API Key，先到「设置」里配一下')
-  for (let attempt = 0; ; attempt++) {
+  let attempt = 0
+  let clamped = false
+  for (;;) {
     const g = guard(signal, timeoutMs)
+    // 撞过上限就按服务端说的值发，别每次都先去撞一次墙
+    const payload = { model: c.model, ...thinkingOf(c), ...body }
+    if (outputCap && typeof payload.max_tokens === 'number')
+      payload.max_tokens = Math.min(payload.max_tokens, outputCap)
     try {
       const res = await fetch(endpoint(c.base), {
         method: 'POST',
@@ -125,7 +140,7 @@ async function request(cfg, body, { signal, timeoutMs, retry = 1 } = {}, read) {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${c.key}`,
         },
-        body: JSON.stringify({ model: c.model, ...thinkingOf(c), ...body }),
+        body: JSON.stringify(payload),
         signal: g.signal,
       })
       if (!res.ok) {
@@ -135,7 +150,15 @@ async function request(cfg, body, { signal, timeoutMs, retry = 1 } = {}, read) {
       }
       return await read(res)
     } catch (e) {
+      // 输出额度发大了：服务端在报错里说了合法区间，照着降一次再发，并把这个上限记住
+      const cap = e.status === 400 && !clamped ? capFrom(e.message) : 0
+      if (cap && typeof body.max_tokens === 'number' && cap < body.max_tokens) {
+        outputCap = cap
+        clamped = true
+        continue
+      }
       if (attempt >= retry || !RETRY_STATUS.has(e.status) || signal?.aborted) throw e
+      attempt++
       await new Promise((r) => setTimeout(r, 700))
     } finally {
       g.done()

@@ -79,7 +79,9 @@ const pathOf = (id) => (id ? topicPath(id).map((t) => t.name).join(' / ') : '')
 // 这里把它摆到明面上，用户点一下就改投过去，不用自己翻列表
 const alt = computed(() => {
   const a = props.saving.alt
-  if (!a || props.saving.mode !== 'new') return null
+  if (!a || props.saving.mode === 'edit') return null
+  // 已经在这篇上了就别再劝一次
+  if (props.saving.mode === 'exist' && props.saving.noteId === a.noteId) return null
   const note = liveNoteById(a.noteId)
   return note ? { ...a, title: note.title } : null
 })
@@ -89,6 +91,11 @@ const useAlt = () => {
   props.saving.noteId = a.noteId
   props.saving.mode = 'exist'
 }
+
+// 写前检查：程序能算出来的毛病（部分重叠、段落和类型对不上、超长一段、全挤在一段），
+// 落库前就摆出来，别让用户写完再自己通读一遍才发现
+const checks = computed(() => (props.saving.mode === 'edit' ? [] : props.saving.checks || []))
+const checkCount = computed(() => checks.value.filter((c) => c.level === 'warn').length)
 
 // 预览里的引用 chip：开新标签看原文，别把面板连同草稿一起关掉
 const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
@@ -114,8 +121,15 @@ const openCite = (id) => window.open(`${location.pathname}#/n/${id}`, '_blank')
     <div v-if="alt" class="ask-alt">
       <span class="ask-alt-q">另一个落点</span>
       <span class="ask-alt-t">《{{ alt.title }}》</span>
-      <span v-if="alt.why" class="ask-alt-w">没写进去是因为{{ alt.why }}</span>
+      <span v-if="alt.why" class="ask-alt-w">{{ saving.mode === 'new' ? '没写进去是因为' : '按内容看更像它：' }}{{ alt.why }}</span>
       <button class="ask-alt-go" @click="useAlt">改投这篇</button>
+    </div>
+
+    <div v-if="checks.length" class="ask-checks">
+      <p class="ask-checks-h">
+        写前检查<span> {{ checks.length }} 条{{ checkCount ? `，${checkCount} 条建议改完再写` : '' }}</span>
+      </p>
+      <p v-for="(c, k) in checks" :key="k" class="ask-check" :class="c.level">{{ c.text }}</p>
     </div>
 
     <div class="ask-save-mode">

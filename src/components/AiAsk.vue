@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, applyChanges, stripMark, SECTIONS, enabledSkills, loadSkillPref, saveSkillPref } from '../lib/ai.js'
+import { loadAI, isAiReady, askLibrary, askAgent, archiveAgent, fileAnswer, assembleBlocks, applyChanges, stripMark, SECTIONS, enabledSkills, loadSkillPref, saveSkillPref, writeChecks } from '../lib/ai.js'
 import { libraryStats } from '../lib/retrieve.js'
 import { attachRefs, cleanBlocks, plainBlocks } from '../lib/draft.js'
 import {
@@ -18,6 +18,7 @@ import {
 } from '../lib/store.js'
 import AiSavePanel from './AiSavePanel.vue'
 import AiThink from './AiThink.vue'
+import { logRun } from '../lib/ai/cross.js'
 import { resolveLink } from '../lib/links.js'
 
 const emit = defineEmits(['close', 'setup'])
@@ -337,6 +338,12 @@ const applyProposal = (s, r) => {
   s.reason = stripMark(r.reason || '')
   s.err = ''
   s.alt = r.alt || null
+  // 走 agent 归档的提案自带复核结果；退回一次性归档判断的那条路没有，就在这儿补算一遍：
+  // 程序能算出来的毛病，没必要等用户落库后自己通读才发现
+  s.checks =
+    r.checks?.length || r.target === 'edit'
+      ? r.checks || []
+      : writeChecks(r.blocks, { note: r.target === 'exist' ? liveNoteById(r.noteId) : null })
   if (r.target === 'edit') {
     s.mode = 'edit'
     s.noteId = r.noteId
@@ -380,6 +387,7 @@ const blankSaving = (t) => {
     skipped: [],
     reason: '',
     alt: null,
+    checks: [],
     analyzing: false,
     err: '',
     trace: [],
@@ -444,6 +452,15 @@ const openSave = (idx) => {
   if (ready.value) analyze(idx)
 }
 
+// 落库前的快照：以前这三条路直接改 blocks，改完就没有回头路（跨笔记那边早有快照，
+// 问答归档却没有）。深拷贝，别让后面原地改块时把快照一起改了
+const snapOf = (n) => ({
+  title: n.title,
+  topicId: n.topicId,
+  domainId: n.domainId,
+  blocks: JSON.parse(JSON.stringify(n.blocks || [])),
+})
+
 const doSave = () => {
   const t = savingTurn.value
   const s = saving.value
@@ -454,13 +471,24 @@ const doSave = () => {
   const body = ai || plainBlocks(t)
 
   const clean = (list) => cleanBlocks(list, newBlockId)
+  // 落完库把这次写入记进流水：面板一关就找不回来的那种反悔，不该再有了
+  const log = (undo, note) =>
+    logRun({
+      kind: 'ask',
+      question: t.q,
+      answer: '',
+      lines: [`《${note.title}》${s.mode === 'edit' ? `改 ${(s.edits || []).length - (s.offEdits || []).length} 处` : `加 ${s.blocks?.length || 0} 块`}`],
+      undo,
+    })
 
   if (s.mode === 'edit') {
     const note = liveNoteById(s.noteId)
     const picked = (s.edits || []).filter((_, i) => !(s.offEdits || []).includes(i))
     if (!note || !picked.length) return
+    const before = snapOf(note)
     note.blocks = applyChanges(note, picked)
     touchNote(note)
+    log({ notes: [{ id: note.id, before, made: [] }] }, note)
     saving.value = null
     emit('close')
     router.push(`/n/${note.id}`)
@@ -470,6 +498,7 @@ const doSave = () => {
   if (s.mode === 'exist') {
     const note = liveNoteById(s.noteId)
     if (!note) return
+    const before = snapOf(note)
     if (ai) {
       // AI 已经把每块归好段了，按段落分别拼进去
       for (const sec of SECTIONS) {
@@ -482,6 +511,7 @@ const doSave = () => {
     }
     touchNote(note)
     if (s.moveTo && s.moveTo !== note.topicId) moveNote(note.id, s.moveTo)
+    log({ notes: [{ id: note.id, before, made: [] }] }, note)
     saving.value = null
     emit('close')
     router.push(`/n/${note.id}`)
@@ -492,6 +522,7 @@ const doSave = () => {
   const note = createNote(s.topicId)
   note.title = (s.title || '').trim() || blankTitle(t.q)
   note.blocks = idifyBlocks(clean(ai ? assembleBlocks(ai) : body))
+  log({ notes: [{ id: '', before: null, made: [note.id] }] }, note)
   saving.value = null
   emit('close')
   router.push(`/n/${note.id}`)

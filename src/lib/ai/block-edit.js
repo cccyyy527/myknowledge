@@ -158,7 +158,7 @@ export function applyChanges(note, changes) {
 // 只留文字和数字，标点空白全去掉：同一句话换个标点不算新内容
 const plainText = (v) => str(v).replace(/[\s\u3000\u00b7:：,，。、/|()（）[\]【】<>《》\-——"'“”‘’!！?？;；]/g, '')
 
-const flatOf = (b) =>
+export const flatOf = (b) =>
   plainText(
     [
       b.text,
@@ -184,18 +184,60 @@ const bigrams = (s) => {
 
 // 同一段话说两遍：短块要求一字不差，长块容许措辞差别。
 // 八字以下不比相似度，免得「方差」和「方差缩减」被当成同一句
-export function alikeBody(a, b) {
-  if (!a || !b) return false
-  if (a === b) return true
-  const short = a.length <= b.length ? a : b
-  const long = a.length <= b.length ? b : a
-  if (short.length < 8) return false
+const SIM_SURE = 0.8 // 字面几乎一样：直接认定重复，不用问模型
+// 预筛只负责「值得让模型看一眼」，所以压得低：实测同义改写（缩尾 / 截断）字面只有 .38～.5，
+// 门槛放在 .6 以上等于自己先把要判的那种情况筛掉了。真正的判断交给 reviewWrite 的模型
+const SIM_NEAR = 0.3
+
+// 短串被长串覆盖的比例
+function coverOf(a, b) {
+  if (!a || !b) return 0
+  if (a === b) return 1
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  if (short.length < 6) return 0
   const A = bigrams(short)
   const B = bigrams(long)
+  if (!A.size || !B.size) return 0
   let hit = 0
   for (const g of A) if (B.has(g)) hit++
-  return hit / A.size >= 0.8
+  return hit / A.size
 }
+
+// Dice 系数：只看覆盖率时，新块比老块多写一倍内容就会被判成「不重复」，
+// 同义改写基本漏检；两个口径取大值，短块不容易误判、长块也不至于漏
+function diceOf(a, b) {
+  if (!a || !b) return 0
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  if (short.length < 6) return 0
+  const A = bigrams(short)
+  const B = bigrams(long)
+  if (!A.size || !B.size) return 0
+  let hit = 0
+  for (const g of A) if (B.has(g)) hit++
+  return (2 * hit) / (A.size + B.size)
+}
+
+const numbersOf = (s) => new Set(s.match(/\d+(?:\.\d+)?/g) || [])
+
+// 0～1 的相似度。数字重合是最强的信号：同一个口径、同一组阈值、同一批数，
+// 十有八九是在讲同一件事，只是换了说法
+export function pairScore(a, b) {
+  if (!a || !b) return 0
+  if (a === b) return 1
+  const sim = Math.max(coverOf(a, b), diceOf(a, b))
+  if (sim < 0.35) return sim
+  const A = numbersOf(a)
+  const B = numbersOf(b)
+  let shared = 0
+  for (const n of A) if (B.has(n) && n.length >= 2) shared++
+  // 封在 0.79：数字重合只用来「拉进候选」，绝不靠它直接判成重复
+  return shared >= 2 ? Math.min(0.79, sim + 0.15) : sim
+}
+
+export function alikeBody(a, b) {
+  return coverOf(a, b) >= SIM_SURE
+}
+
 
 const sectionOfId = (blocks, id) => {
   const at = blocks.findIndex((b) => b.id === id)
@@ -209,26 +251,65 @@ const labelOf = (b) => {
   return raw.length > 18 ? `${raw.slice(0, 18)}…` : raw
 }
 
-// 这次要加的块里，哪些和这篇已有的块（或本次已收的块）讲的是同一件事
-export function dupBlocks(note, blocks, skipIds = []) {
-  const pool = (note?.blocks || []).filter((b) => b.type !== 'heading' && !skipIds.includes(b.id))
+// 这次要加的块里，哪些和这篇已有的块（或本次已收的块）沾边。
+// 返回带 sim 的候选：sim ≥ 0.8 当场算重复，0.34～0.8 之间交给语义复核判。
+// 同一批里的块也要互相比：模型很容易在一条回答里把同一件事拆成两块写两遍，
+// 而这种情况旧块里可能一个字都没有，只比旧块会整个漏掉
+export function dupCandidates(note, blocks, skipIds = []) {
+  const pool = (note?.blocks || [])
+    .filter((b) => b.type !== 'heading' && !skipIds.includes(b.id))
+    .map((b) => ({ b, t: flatOf(b) }))
+    .filter((x) => x.t)
+  const seen = []
   const hits = []
-  for (const b of arr(blocks)) {
-    const t = flatOf(b)
-    if (!t) continue
-    const old = pool.find((e) => alikeBody(t, flatOf(e)))
-    if (old) hits.push({ block: b, old, section: sectionOfId(note.blocks, old.id) })
-    else pool.push(b)
-  }
+  arr(blocks).forEach((block, i) => {
+    const t = flatOf(block)
+    if (!t) return
+    let best = null
+    for (const [list, batch] of [
+      [pool, false],
+      [seen, true],
+    ]) {
+      for (const e of list) {
+        const sim = pairScore(t, e.t)
+        if (sim >= SIM_NEAR && (!best || sim > best.sim)) best = { sim, block: e.b, batch }
+      }
+    }
+    if (best) {
+      hits.push({
+        i,
+        block,
+        old: best.block,
+        sameBatch: best.batch,
+        section: best.batch ? '' : sectionOfId(note.blocks, best.block.id),
+        sim: best.sim,
+      })
+    }
+    seen.push({ b: block, t })
+  })
   return hits
 }
 
+// 这次要加的块里，哪些和这篇已有的块讲的是同一件事（字面层面已经确定的那种）
+export function dupBlocks(note, blocks, skipIds = []) {
+  return dupCandidates(note, blocks, skipIds).filter((x) => x.sim >= SIM_SURE)
+}
+
+
 export function dupIssue(hits) {
-  const rows = hits.map(({ block, old, section }) => {
-    const where = section ? `「${secTitle(section)}」` : '这篇'
-    const was = labelOf(old)
-    return `- 想加的「${labelOf(block)}」＝ ${where}里的 [#${old.id}]${was ? `「${was}」` : ''}`
-  })
+  const batch = hits.filter((h) => h.sameBatch)
+  const rows = hits
+    .filter((h) => !h.sameBatch)
+    .map(({ block, old, section }) => {
+      const where = section ? `「${secTitle(section)}」` : '这篇'
+      const was = labelOf(old)
+      return `- 想加的「${labelOf(block)}」＝ ${where}里的 [#${old.id}]${was ? `「${was}」` : ''}`
+    })
+  if (batch.length) {
+    rows.push(
+      `- 这次要加的里面自相重复：第 ${batch.map((h) => h.i + 1).join('、')} 块和第 ${batch[0].i + 1} 块讲的是同一件事，只留一块`
+    )
+  }
   return `这篇已经有这些内容了，再加就是同一段话说两遍：\n${rows.join('\n')}\n改成 mode=edit，把动作落在已有那块上：段落放错了就用 op=move（blockId 填 [#] 里的 id、section 填该去的那段，内容不用重给）；说法过时或要补一句就用 op=replace（blockId 同上，给全改完的整块内容）。这篇确实没写过的内容才用 mode=exist 追加。`
 }
 

@@ -1015,6 +1015,18 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .ask-alt-go:hover { border-color: var(--accent); color: var(--accent); }
 
+/* 写前检查：程序算出来的毛病，落库前摆出来 */
+.ask-checks {
+  margin-top: 8px; padding: 7px 9px; border-radius: 8px;
+  background: #fbfaf7; border: 1px solid var(--line);
+}
+.ask-checks-h { margin: 0 0 4px; font-size: 11px; color: var(--ink-2); font-weight: 600; }
+.ask-checks-h span { font-weight: 400; color: var(--ink-3); margin-left: 6px; }
+.ask-check { margin: 0; font-size: 11px; line-height: 1.62; color: var(--ink-2); }
+.ask-check + .ask-check { margin-top: 3px; }
+.ask-check.warn { color: #8a6a1f; }
+.ask-check.info { color: var(--ink-3); }
+
 /* 新建 / 写进已有笔记 的切换 */
 .ask-save-mode { display: flex; gap: 6px; margin-top: 8px; }.ask-save-mode button {
   flex: 1; font-size: 11.5px; padding: 5px 8px; border: 1px solid var(--line);

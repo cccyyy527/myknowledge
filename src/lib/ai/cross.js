@@ -26,6 +26,7 @@ import {
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
 import { reviseNote, applyOps, sectioned } from './revise.js'
+import { pairScore, flatOf } from './block-edit.js'
 
 const MAX_NOTES = 6
 const BUDGET = 5000 // 每篇塞进 prompt 的字数上限，几篇加起来别把窗口撑爆
@@ -414,6 +415,64 @@ export function normalizePlan(data, notes) {
   return out
 }
 
+// 模型判 merge 时总会漏掉措辞不同的那几对：它读的是摘要，看不到「缩尾」和「截断」是一回事。
+// 这里按字面相似度把跨篇的近似块两两挑出来，补成默认不勾的 merge 项，让人自己看一眼
+const DUP_SIM = 0.72
+function dupPairs(notes) {
+  const rows = []
+  for (const n of notes) {
+    for (const r of sectioned(n)) {
+      const t = flatOf(r.block)
+      if (t) rows.push({ noteId: n.id, noteTitle: n.title, section: r.section, block: r.block, t })
+    }
+  }
+  const out = []
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const a = rows[i]
+      const b = rows[j]
+      if (a.noteId === b.noteId) continue
+      const sim = pairScore(a.t, b.t)
+      if (sim >= DUP_SIM) out.push({ keep: a, drop: b, sim })
+    }
+  }
+  return out
+}
+
+// 已经出现在清单里的块不再补，免得同一条改动被列两次
+function withDupMerge(items, notes) {
+  const touched = new Set()
+  for (const it of items) {
+    if (it.blockId) touched.add(it.blockId)
+    if (it.otherId) touched.add(it.otherId)
+    for (const id of arr(it.blockIds)) touched.add(id)
+  }
+  const added = []
+  for (const p of dupPairs(notes)) {
+    if (touched.has(p.drop.block.id) || touched.has(p.keep.block.id)) continue
+    touched.add(p.drop.block.id)
+    added.push({
+      op: 'merge',
+      // 默认不勾：字面像不等于真重复，得人看一眼
+      checked: false,
+      key: `merge-auto-${added.length}`,
+      why: `程序比对：两篇说法几乎一样（${Math.round(p.sim * 100)}% 重合）`,
+      noteId: p.drop.noteId,
+      noteTitle: p.drop.noteTitle,
+      section: p.drop.section,
+      block: p.drop.block,
+      blockId: p.drop.block.id,
+      to: p.keep.section,
+      otherId: p.keep.block.id,
+      otherBlock: p.keep.block,
+      otherNoteId: p.keep.noteId,
+      otherNoteTitle: p.keep.noteTitle,
+      otherSection: p.keep.section,
+    })
+  }
+  return added.length ? [...items, ...added] : items
+}
+
 export async function planCross({ ids, question = '', cfg } = {}) {
   const notes = pickNotes(ids)
   if (!notes.length) throw new Error('先勾一篇以上')
@@ -431,7 +490,7 @@ export async function planCross({ ids, question = '', cfg } = {}) {
     question: q,
     // 模型爱把 [#块id] 抄进总结里，块 id 是给 items 用的，正文里不该出现
     answer: stripMark(str(data && data.answer)),
-    items: normalizePlan(data, notes),
+    items: withDupMerge(normalizePlan(data, notes), notes),
     notes: notes.map((n) => ({ id: n.id, title: n.title, path: pathName(n.topicId) })),
   }
 }
@@ -556,7 +615,7 @@ const RUN_KEY = 'myknowledge.cross.runs'
 const RUN_MAX = 12 // 历史最多留这么多次
 const RUN_UNDO_MAX = 5 // 只有最近几次带完整快照，再往前只留记录，省着点本机存储
 
-export const RUN_KIND = { plan: '清单写入', revise: '逐篇重构' }
+export const RUN_KIND = { plan: '清单写入', revise: '逐篇重构', ask: '问答归档' }
 
 // 内容指纹：标题 + 各块文字折成一个短串，用来判断「这次改完之后，那篇有没有又被改过」
 const sig = (note) => {

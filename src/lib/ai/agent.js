@@ -5,6 +5,7 @@ import { searchNotes, noteText, noteIsEmpty, noteBrief } from '../retrieve.js'
 import { loadAI, isAiReady, thinkOn, chatStreamTools } from './client.js'
 import { SECTIONS, SECTION_SPEC, str, normalizeBlocks, stripMark, OUTSIDE_MARK, sectionDumpIssue } from './schema.js'
 import { planEdits, dupBlocks, dupIssue } from './block-edit.js'
+import { reviewWrite, sameIssue, writeChecks } from './place.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { FILE_RULE } from './compose.js'
 import { trimHistory } from './ask.js'
@@ -13,8 +14,12 @@ import { buildSystem } from './skills.js'
 
 /* ---------- L3.5：agent —— 模型自己查、自己读、自己归档 ---------- */
 
-// 工具轮数上限：正常的问答 1～3 轮就够，6 轮还没收尾说明它在瞎转
-export const MAX_ROUNDS = 6
+// 工具轮数上限：正常的问答 1～3 轮就够。归档那步会额外做一次程序复核、
+// 可能打回重来一次，所以留得比从前宽，但只要绕圈就要收
+export const MAX_ROUNDS = 10
+
+// 打回的总次数上限：复核能救人，也能把轮数全烧在同一个错误上
+const MAX_BOUNCE = 3
 
 const SECTION_IDS = ['core', 'detail', 'qa', 'pitfall', 'todo']
 
@@ -182,7 +187,7 @@ function citeIndex(ctx, note) {
   return ctx.refs.length
 }
 
-function runTool(ctx, call) {
+async function runTool(ctx, call) {
   const name = call.function?.name || ''
   let args = {}
   try {
@@ -285,7 +290,10 @@ function runTool(ctx, call) {
     // 那篇笔记的「核心结论」会一直是空的
     const dump = sectionDumpIssue(blocks)
     if (dump) {
-      return { content: `${dump}\n重新调用 save_note，块内容可以照搬，只把 section 改对。`, summary: '🗂 打回：全塞进高频问法' }
+      return {
+        content: `${dump}\n重新调用 save_note，块内容可以照搬，只把 section 改对。`,
+        summary: '🗂 打回：段落和块类型对不上',
+      }
     }
     const oldNote = liveNoteById(str(args.noteId))
     const mode = args.mode === 'exist' && oldNote ? 'exist' : 'new'
@@ -294,30 +302,79 @@ function runTool(ctx, call) {
       const dup = dupBlocks(oldNote, blocks)
       if (dup.length) return { content: dupIssue(dup), summary: `🗂 打回：${dup.length} 块这篇已有` }
     }
+
+    // 程序复核：跟库里其它篇（和目标这篇的近似块）比一遍，顺带判「该不该写在这儿」。
+    // 模型看不到别篇已经写了什么，这一层不补，「同义改写漏检」和「总想新建」都治不了
+    const review = await reviewWrite({
+      blocks,
+      chosenId: mode === 'exist' ? oldNote.id : '',
+      cfg: ctx.cfg,
+      signal: ctx.signal,
+    })
+    const targetId = mode === 'exist' ? oldNote.id : ''
+    const same = review.dup.filter((x) => x.v === 'same')
+    if (same.length && ctx.bounce < MAX_BOUNCE) {
+      ctx.bounce += 1
+      return {
+        content: sameIssue(same, targetId),
+        summary: `🗂 打回：库里已有同一件事（${same.length} 处）`,
+      }
+    }
+    // 只是部分重叠：不拦，写在面板上让人自己决定要不要合并
+    const soft = review.dup.filter((x) => x.v === 'part')
+    // 程序检索出来的「更像该写进去的那篇」：和模型选的不一样才拿出来说
+    const better =
+      review.place && review.place.noteId && review.place.noteId !== targetId
+        ? liveNoteById(review.place.noteId)
+        : null
+
     const nearId = str(args.nearNoteId)
     const near = nearId ? liveNoteById(nearId) : null
 
     // 新建是最省事但也最容易造重复的选项。库里查到过候选、却没读过任何一篇就新建，
     // 一律打回：先看一遍再决定，这是「总是倾向新建」的主要来源。
-    if (mode === 'new' && ctx.seen.size) {
+    if (mode === 'new' && ctx.seen.size && ctx.bounce < MAX_BOUNCE) {
       if (!near) {
         const cands = [...ctx.seen.values()]
           .sort((a, b) => b.count - a.count)
           .map((h) => `- 《${h.title}》（id: ${h.id}）${h.empty ? '空笔记' : `已有 ${h.count} 块`}`)
           .join('\n')
+        ctx.bounce += 1
         return {
           content: `库里查到过这些相关笔记，你不能直接新建：\n${cands}\n先 read_note 读最接近的那篇，然后二选一——能装下就改成 mode=exist / edit；确实装不下就继续 new，但要把那篇填进 nearNoteId，并在 nearNoteWhy 里说清为什么放不进它。`,
           summary: '🗂 打回：新建前没读候选笔记',
         }
       }
       if (!ctx.read.has(near.id)) {
+        ctx.bounce += 1
         return {
           content: `nearNoteId 指向《${near.title}》，但你这一轮没读过它的正文。先 read_note（id: ${near.id}）看清楚它已经写了什么，再回答「这次内容放进去合不合适」。`,
           summary: `🗂 打回：没读《${near.title}》就判它不合适`,
         }
       }
     }
+    // agent 压根没搜过库：程序按这次内容检索出来的那篇，就是它该先看的那篇
+    if (mode === 'new' && !ctx.seen.size && better && ctx.bounce < MAX_BOUNCE) {
+      ctx.bounce += 1
+      return {
+        content: `你要新建一篇，但按这次内容在库里检索，最接近的是《${better.title}》（id: ${better.id}）。先 read_note 看它已经写了什么：能装下就改成 mode=exist / edit 写进去；确实装不下再继续 new，并把 nearNoteId 填 ${better.id}、nearNoteWhy 一句话说清为什么它装不下。`,
+        summary: `🗂 打回：没看《${better.title}》就新建`,
+      }
+    }
+
     const topicId = mode === 'exist' ? oldNote.topicId : topicExists(args.topicId) ? args.topicId : fallbackTopicId()
+    // 用户能不能一眼看出「其实还有更好的落点」，全靠这一对：新建时是模型放弃的那篇，
+    // 追加时是程序检索觉得更像的那篇
+    const altNote = mode === 'new' ? near : better
+    const alt =
+      altNote && altNote.id !== (mode === 'exist' ? oldNote.id : '')
+        ? {
+            noteId: altNote.id,
+            noteTitle: altNote.title,
+            why: stripMark(str(mode === 'new' ? args.nearNoteWhy : review.place?.why)),
+          }
+        : null
+    const checks = writeChecks(blocks, { note: mode === 'exist' ? oldNote : null, soft })
     ctx.proposal = {
       target: mode,
       title: str(args.title),
@@ -326,18 +383,21 @@ function runTool(ctx, call) {
       section: SECTIONS.some((s) => s.id === args.section) ? args.section : blocks[0].section || 'core',
       reason: stripMark(str(args.reason)),
       blocks,
-      // 用户能不能一眼看出「其实还有更好的落点」，全靠这一对
-      alt: mode === 'new' && near ? { noteId: near.id, noteTitle: near.title, why: stripMark(str(args.nearNoteWhy)) } : null,
+      alt,
+      checks,
     }
     const where =
       mode === 'exist'
         ? `写进《${oldNote.title}》${blocks.length} 块`
         : `新建《${str(args.title) || '未命名'}》${blocks.length} 块`
-    const alt = ctx.proposal.alt ? `；备选落点《${ctx.proposal.alt.noteTitle}》会一并给用户看` : ''
+    const extra = [alt ? `备选落点《${alt.noteTitle}》` : '', checks.length ? `${checks.length} 条复核提示` : '']
+      .filter(Boolean)
+      .join('；')
     return {
-      content: `提案已记录：${where}${alt}。用户可以改也可以取消——不要再提交一遍，也不要在正文里复述这些块。`,
-      summary: `🗂 归档：${where}`,
+      content: `提案已记录：${where}${extra ? `（${extra} 会一并给用户看）` : ''}。用户可以改也可以取消——不要再提交一遍，也不要在正文里复述这些块。`,
+      summary: `🗂 归档：${where}${checks.length ? `（${checks.length} 条提示）` : ''}`,
     }
+
   }
 
   return { content: `没有叫 ${name} 的工具。`, summary: `⚠ 未知工具 ${name}` }
@@ -366,6 +426,10 @@ export async function agentRun({
     proposal: null,
     seen: new Map(cited.map((x) => [x.id, noteBrief(x.note, 0)])),
     read: new Set(cited.map((x) => x.id)),
+    // 写库复核要用的东西：模型配置、外部取消、以及「打回得了几次」的计数
+    cfg: conf,
+    signal,
+    bounce: 0,
   }
   // 思考开关一旦降级或这一轮没产出思考内容，后面就一路关着：历史里的 assistant 消息已经
   // 缺 reasoning_content，DeepSeek 在思考模式下会因此直接 400，补不回来了
@@ -399,7 +463,7 @@ export async function agentRun({
     if (!(thinking && reasoning)) think = false
     msgs.push(am)
     for (const c of toolCalls) {
-      const out = runTool(ctx, c)
+      const out = await runTool(ctx, c)
       onTrace && onTrace(out.summary)
       msgs.push({ role: 'tool', tool_call_id: c.id, content: out.content })
     }

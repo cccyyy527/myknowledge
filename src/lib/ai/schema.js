@@ -147,11 +147,32 @@ export function normalizeBlocks(list) {
 export function sectionDumpIssue(blocks) {
   const list = arr(blocks)
   if (list.length < 2) return ''
-  if (list.some((b) => (b.section || 'core') !== 'qa')) return ''
-  const cards = list.filter((b) => b.type === 'qa').length
-  if (cards * 2 >= list.length) return ''
-  return `这 ${list.length} 块全标成了 qa（高频问法），但其中只有 ${cards} 块真是问答卡。段落按内容语义定，跟这次内容从哪来无关：能站住的断言进 core，公式 / 前提 / 推导 / 对比进 detail，只有「面试官会这么问 + 我怎么答」的卡才进 qa。`
+  const problems = []
+  if (list.every((b) => (b.section || 'core') === 'qa')) {
+    const cards = list.filter((b) => b.type === 'qa').length
+    if (cards * 2 < list.length)
+      problems.push(
+        `这 ${list.length} 块全标成了 qa（高频问法），但其中只有 ${cards} 块真是问答卡。段落按内容语义定，跟这次内容从哪来无关：能站住的断言进 core，公式 / 前提 / 推导 / 对比进 detail，只有「面试官会这么问 + 我怎么答」的卡才进 qa。`,
+      )
+  }
+  // 逐块看：问答段 / 坑段是最窄的两个段，塞进别的类型一定是放错了。
+  // 以前只拦「全塞 qa」，于是公式塞 core、一段断言塞进坑段，程序一句话都不说
+  const wrong = list.filter((b) => {
+    const sec = b.section || 'core'
+    return (sec === 'qa' && b.type !== 'qa') || (sec === 'pitfall' && b.type !== 'pitfall')
+  })
+  if (wrong.length) {
+    const rows = wrong
+      .slice(0, 4)
+      .map((b) => `- ${b.type} 块「${str(b.text || b.term || b.question || b.answer || (b.items || [])[0]).slice(0, 16)}」被标成 ${b.section}`)
+      .join('\n')
+    problems.push(
+      `这些块的段落和类型对不上：\n${rows}\n「高频问法」只放 qa 卡，「我踩过的坑」只放 pitfall 卡。断言进 core，推导 / 前提 / 公式 / 对比进 detail；不是这两种卡就别往这两个段塞。`,
+    )
+  }
+  return problems.join('\n')
 }
+
 
 // 去掉内部使用的 section 字段，只留真正的块字段
 export const stripSection = (b) => {

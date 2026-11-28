@@ -3,14 +3,12 @@
 import { liveNoteById } from '../store.js'
 import { searchNotes, noteText, noteIsEmpty, noteBrief } from '../retrieve.js'
 import { loadAI, isAiReady, thinkOn, chatStreamTools } from './client.js'
-import { SECTIONS, SECTION_SPEC, str, normalizeBlocks, stripMark, OUTSIDE_MARK, sectionDumpIssue } from './schema.js'
+import { SECTIONS, str, normalizeBlocks, stripMark, sectionDumpIssue } from './schema.js'
 import { planEdits, dupBlocks, dupIssue } from './block-edit.js'
 import { reviewWrite, sameIssue, writeChecks } from './place.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
-import { FILE_RULE } from './compose.js'
 import { trimHistory } from './ask.js'
-import { NO_FABRICATE, NO_FABRICATE_WRITE } from './prompts.js'
-import { buildSystem } from './skills.js'
+import { systemFor } from './skills/index.js'
 
 /* ---------- L3.5：agent —— 模型自己查、自己读、自己归档 ---------- */
 
@@ -474,72 +472,24 @@ export async function agentRun({
   return { text: answer, refs: ctx.refs, proposal: ctx.proposal, messages: msgs }
 }
 
-const AGENT_RULES = `你是这个私人知识库的 agent。用户是准备数据分析 / AB 实验 / 因果推断面试的人，库里是他自己写的笔记——其中有些笔记只有小节标题、正文还是空的。
-
-你能调用工具：search_notes 检索、read_note 读整篇、list_topics 看分类、save_note 提交归档提案。
-
-怎么用工具：
-- 先 search_notes，可以换 2～3 种说法反复查，别查一次没中就下结论。
-- 结果里标题看着对口的，一定 read_note 打开看正文，不要凭标题猜里面写了什么。
-- read_note 正文里每块前面那个 [#b-xxxx] 是程序给块编的号：只在 save_note 的 blockId 里填它，回答正文里一个都不要抄。
-- 来自笔记的具体结论后面标 [n]，n 必须是工具返回的那些编号，不要自己另编号。`
-
-const AGENT_ANSWER = `
-
-回答怎么写：
-- 先给结论，再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。
-- 笔记里有：就按笔记讲，讲完停。
-- 笔记里没有、但你确实知道的：另起一段，段首单独占一行写「${OUTSIDE_MARK}」，把该讲的内容讲清楚、讲完整；整段讲完，最多用一句话说明库里哪篇最接近、还缺什么。不要把「库里缺什么」写在开头当成答案。这个标记是给程序切段用的，渲染时会被去掉：不要解释它、不要重复它、也不要写进 save_note 的块里。
-- read_note 显示某篇只有小节标题没有正文时，就说「库里那篇《X》还是空的」。它的标题只能当成「这个话题还打算写」，不能当成已有结论引用。
-- ${NO_FABRICATE}
-- 用户问「有哪些 / 列一下」时，把查到的都列出来，一条一行，每条带 [n]。
-- 库里另有笔记专门讲这件事时，用 [[那篇的完整标题]] 指过去（标题必须和工具返回的完全一致），别把整篇内容抄过来。
-- 笔记之间说法冲突时，指出是哪两篇、各自怎么写，别替他打圆场。
-- 用户问的这件事如果正好是某篇里某一段写错了、写漏了，直接说清是哪一篇哪一块该怎么改；他让你改的时候用 save_note 的 mode=edit 提改动。
-- 除了 [n] 和 [[标题]]，不要再出现别的方括号标记、标签或前缀；用户看不见块 id，别拿它当正文。
-- 别汇报过程：不要罗列「读了哪几篇、哪些块保留不动、接下来打算怎么查」，要答案就直接给。
-- 除非用户明确让你存成笔记或改笔记，否则不要调用 save_note。`
-
-const AGENT_STRICT = `${AGENT_RULES}
-
-只查笔记模式（用户面试前怕被带偏，一个字都不许超出笔记）：
-- 只能依据 read_note / search_notes 拿到的内容回答，每条具体结论都带 [n]。
-- 禁止用你自己的通用知识补充，禁止写「${OUTSIDE_MARK}」段落，禁止编造数字、论文名、公司案例。
-- 笔记里没写的直接说「库里还没有」，再说最接近哪一篇、缺什么，然后就停。
-- 中文，先给结论再给依据，尽量短。可以用「- 」列表和 **粗体**，不要用 # 标题、不要用表格。`
-
 // history 只放最近几轮问答，别把整段对话灌进去
 export function askAgent({ question, history = [], cfg, strict = false, skill, extra, ...rest } = {}) {
-  const base = strict ? AGENT_STRICT : AGENT_RULES + AGENT_ANSWER
   const messages = [
-    { role: 'system', content: buildSystem(base, { skill, extra }) },
+    { role: 'system', content: systemFor(strict ? 'agent-strict' : 'agent', { role: skill, extra }) },
     ...trimHistory(history),
     { role: 'user', content: question },
   ]
   return agentRun({ messages, cfg, strict, ...rest })
 }
 
-const ARCHIVE_NUDGE = `把上面这轮问答存进知识库。落点怎么选，按这个顺序想：
-1. 先 search_notes 查同主题笔记。命中里只要有一篇的标题能概括这次内容，就落在它身上——内容是补充就往对应小节追加（exist），是在纠正/改写已有块的说法就用 edit。
-2. 拿不准能不能装下时 read_note 读那篇，看它已有小节都写了什么、缺的是什么。宁可追加到一篇略宽的标题下，也不要制造两篇讲同一件事的笔记。
-3. 只有当「放进那篇会让标题名不副实」或者「这确实是库里还没有的新主题」才新建；新建时 nearNoteId 必须填你放弃的那篇，nearNoteWhy 一句话说清为什么它装不下。
-${FILE_RULE}
-- 追加进已有笔记时，需要的话 read_note 看它已有的小节和块 id。
-- 然后调用 save_note 提交提案：mode、noteId 或 topicId、reason，以及 blocks 或 edits。
-- 这轮回答如果是在纠正、补充、更新已有块里的说法，用 mode=edit：edits 里逐条写 op（replace 整块改写 / remove 删除 / insert 在目标块后就地插一块 / move 只把块挪到对的段落），blockId 取自 read_note 的 [#块id]，块内容要给全（move 不用给）。
-- 追加之前先对照这篇已有的块：这次要说的事那篇里已经写了，只是段落放错 → mode=edit + op=move 归位；说法过时或要补一句 → op=replace 改那一块。库里已有的内容再追加一块，会被打回。
-- 纯粹是新内容才用 mode=exist 往小节末尾追加 blocks。
-- blocks 要按语义分块（paragraph / definition / formula / qa / pitfall / steps / comparison），别把整篇答案塞进一张问答卡。
-- 每块都带 section，按内容语义定，跟这次内容是从一个问答来的无关 —— 别因为用户「问了个问题」就把整条答案都标成 qa。只有真写成「面试官会这么问 + 我怎么答」的卡才放 qa；一句能站住的结论进 core，公式 / 前提 / 推导 / 对比进 detail。
-${SECTION_SPEC}
-- 回答里的 [1] [2] 这些编号原样保留。
-- 上面这轮回答整篇收进来：按内容顺成一条，不要标注哪句是引用、哪句是你自己补的，也不要留任何方括号标签或前缀。
-- 笔记里没有、但确实成立的通用知识可以写进来，写清楚成立条件和结论就行。${NO_FABRICATE_WRITE}
-- 内容牵涉库里别的笔记时，写 [[那篇的完整标题]]，标题必须和工具返回的一字不差；不确定就不写。
-- 这里的回答是给归档器看的，不用长篇解释；提案提交完说一句归档到哪了就停。`
-
-// 沿着问答那轮的同一个会话往下走：模型还记着刚才查过什么，判断更准
-export function archiveAgent({ messages, refs = [], cfg, onTrace, signal } = {}) {
-  const next = [...messages, { role: 'user', content: ARCHIVE_NUDGE }]
+// 沿着问答那轮的同一个会话往下走：模型还记着刚才查过什么，判断更准。
+// 但 system 必须换掉重来 —— 上一轮可能是「出题官」，那套人设留在归档轮里会和这一轮真正要做的事抢注意力
+export function archiveAgent({ messages = [], refs = [], cfg, onTrace, signal } = {}) {
+  const kept = messages.filter((m) => m.role !== 'system')
+  const next = [
+    { role: 'system', content: systemFor('archive') },
+    ...kept,
+    { role: 'user', content: '把上面这轮问答存进知识库。' },
+  ]
   return agentRun({ messages: next, refs, cfg, maxTokens: 2000, onTrace, signal })
 }

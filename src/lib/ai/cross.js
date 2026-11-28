@@ -14,8 +14,6 @@ import {
 import { noteText, blockText } from '../retrieve.js'
 import { chat, pickJson } from './client.js'
 import {
-  BLOCK_SPEC,
-  SECTION_SPEC,
   SECTIONS,
   str,
   arr,
@@ -24,7 +22,7 @@ import {
   stripMark,
 } from './schema.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
-import { NO_FABRICATE_WRITE } from './prompts.js'
+import { systemFor } from './skills/index.js'
 import { reviseNote, applyOps, sectioned } from './revise.js'
 import { pairScore, flatOf } from './block-edit.js'
 
@@ -56,21 +54,6 @@ const packNotes = (notes) =>
 
 /* ---------- 整合成一篇新笔记 ---------- */
 
-const MERGE_SYSTEM = `你在整理一个数据分析面试知识库。用户挑了其中的几篇，要你把它们揉成一篇新的。
-
-${BLOCK_SPEC}
-${SECTION_SPEC}
-
-要求：
-- 不是把原文粘起来：重复的合并、散乱的重新归段、该并成一处的并成一处的。目标是「面试前只读这一篇也够」。
-- 原文的结论、数字、公式、条件要原样搬，不许改口径；${NO_FABRICATE_WRITE}
-- 几篇之间说法不一致时，不要自己挑一个：两边都写进块里并点明分歧，同时写进 advice。
-- 原文里已经指向别篇的引用（[[标题]]）照留，别把被引的那篇的内容抄过来。
-- 标题要能盖住这几篇的共同主题，短，不带书名号。
-- 从给定分类树里挑最合适的一个分类填 topicId，必须原样复制树里出现过的 id，不要自己发明。
-- 只输出一个 JSON 对象：
-{"title":"...","topicId":"...","reason":"为什么这样合、哪几块是从哪篇来的","advice":"原文之间的冲突或明显缺口，一句话","blocks":[{"type":"...","section":"...",...}]}`
-
 export async function mergeNotes({ ids, instruction = '', cfg } = {}) {
   const notes = pickNotes(ids)
   if (notes.length < 2) throw new Error('至少要选两篇')
@@ -85,7 +68,7 @@ ${packNotes(notes)}
 
   const text = await chat(
     [
-      { role: 'system', content: MERGE_SYSTEM },
+      { role: 'system', content: systemFor('merge') },
       { role: 'user', content: user },
     ],
     { cfg, temperature: 0.25, maxTokens: 8000 },
@@ -104,20 +87,6 @@ ${packNotes(notes)}
 
 /* ---------- 一致性检查（只读，不写盘） ---------- */
 
-const AUDIT_SYSTEM = `你在核对一个数据分析面试知识库里几篇笔记之间的一致性。只读检查，不改任何内容。
-
-找三类问题：
-- conflict 两处说法互相矛盾：同一个数字、条件、前提对不上，或者因果方向相反
-- dupe     两处讲的是同一件事，只是换了措辞（面试前读会白费时间）
-- gap      一篇里说「详见某篇」但那边其实没写，或者这组笔记里明显缺的一环
-
-判据从严：只有真的会让人做出错误判断、或者会白读一遍，才算问题。用词不同、角度不同都不算。
-每条必须带原文引用，照抄 12-40 字，不许改写、不许概括，否则用户翻不到。
-
-只输出一个 JSON 对象：
-{"items":[{"kind":"conflict","a":{"note":"笔记标题","quote":"原文照抄"},"b":{"note":"笔记标题","quote":"原文照抄"},"why":"一句话说清哪里对不上","fix":"一句话说怎么处理"}]}
-gap 类没有 b，只给 a。`
-
 export async function auditNotes({ ids, cfg } = {}) {
   const notes = pickNotes(ids)
   if (notes.length < 2) throw new Error('至少要选两篇')
@@ -127,7 +96,7 @@ ${packNotes(notes)}`
 
   const text = await chat(
     [
-      { role: 'system', content: AUDIT_SYSTEM },
+      { role: 'system', content: systemFor('audit') },
       { role: 'user', content: user },
     ],
     { cfg, temperature: 0.1, maxTokens: 4000 },
@@ -256,33 +225,6 @@ export function undoRevises(undo) {
 }
 
 /* ---------- 跨笔记提问：先回答问题，再给一份能点的清单 ---------- */
-
-const ASK_SYSTEM = `你在看一个数据分析面试知识库里的几篇笔记，用户对它们提了一个问题。你要做两件事。
-
-一、先回答（answer）。结论放第一句，两三句说完。不要说「这几篇各有侧重」这种不落地的话——要么说清哪里撞了、哪里缺了，要么说清都该留着、为什么。
-
-${BLOCK_SPEC}
-${SECTION_SPEC}
-
-二、如果该动，给一份清单（items）。每条都要落到具体块上，不许写「建议精简」这种空话。id 一律从下面原文里原样抄，抄错整条作废。
-
-能做的动作：
-- move   {"op":"move","id":"块id","to":"core|detail|qa|pitfall|todo","why":"..."}   这块放错段了，挪到 to
-- merge  {"op":"merge","keep":"块id","drop":"块id","why":"..."}                     两块讲的是同一件事：留 keep、删 drop（可以跨篇）
-- reword {"op":"reword","id":"块id","to":"段id","block":{...},"why":"..."}          这块说法过时或有误：换成 block 这段（给全整块）
-- drop   {"op":"drop","id":"块id","why":"..."}                                      这块是废话 / 重复 / 已被别处完全盖住
-- fold   {"op":"fold","from":"篇id","into":"篇id","why":"..."}                      两篇其实是一篇：from 并进 into，from 整篇进回收站
-- split  {"op":"split","note":"篇id","title":"新篇标题","ids":["块id"],"why":"..."}  这篇讲了两件事：ids 这几块拆成新篇
-- keep   {"op":"keep","note":"篇id","why":"..."}                                    这篇不用动，说清留着它干什么
-
-判据从严：
-- 只有「读的人会因此判断错」或者「同一件事被读两遍」才算问题。用词不同、角度不同、深浅不同都不算。
-- 段落放错算 move：名词解释塞进「高频问法」、公式占着「核心结论」、纯推导挤掉结论。
-- 问「每篇都要留着吗」时：只有当 A 的内容被 B 基本盖住、留着只会让人两边翻，才 fold；A 里还有 B 没有的块就 keep。
-- 别为了显得有用硬凑。没问题就 items 给空数组。
-
-只输出一个 JSON 对象：
-{"answer":"...","items":[...]}`
 
 // 模型要精确点到某一块，就得看见块 id：和 agent 的 read_note 同一套编号
 const packForAsk = (notes) =>
@@ -480,7 +422,7 @@ export async function planCross({ ids, question = '', cfg } = {}) {
   if (!q) throw new Error('先写一句你要问的')
   const text = await chat(
     [
-      { role: 'system', content: ASK_SYSTEM },
+      { role: 'system', content: systemFor('cross') },
       { role: 'user', content: `我勾的笔记：\n\n${packForAsk(notes)}\n\n我要问的是：${q}` },
     ],
     { cfg, temperature: 0.15, maxTokens: 4000 },

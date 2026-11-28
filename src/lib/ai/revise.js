@@ -5,8 +5,6 @@ import { searchNotes, blockText } from '../retrieve.js'
 import { chatStreamTools, loadAI, thinkOn, trimThread, settleThread } from './client.js'
 import {
   SECTIONS,
-  BLOCK_SPEC,
-  SECTION_SPEC,
   str,
   arr,
   normalizeBlocks,
@@ -19,8 +17,8 @@ import {
   AFTER_ARG,
   OUTSIDE_ARG,
 } from './schema.js'
-import { NO_FABRICATE_WRITE } from './prompts.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
+import { systemFor } from './skills/index.js'
 
 /* ---------- 段落归属 ---------- */
 
@@ -192,35 +190,26 @@ const roundsText = (history) => {
   return `\n前几轮已经改过这些（下面的块就是改完的样子，别重复做，也别撤销）：\n${list.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
 }
 
-const reviseSystem = (allowSplit, outside, thinking) => `你在改一篇数据分析面试知识笔记，一次只动一块，改完交差。用户会给你现有内容、程序算出的结构诊断、以及想要的改动。
-
-${BLOCK_SPEC}
-${SECTION_SPEC}
-
-怎么干：
-- 现有块都带 id。用工具一块一块改：挪、改写、删、补。每调一个工具，程序就真改一处，并回你一句结果（成功，还是 id 打错了），接着调下一个就行，没人催你。
-- 块多就多调几次，别想着一次说完。全部改到位后调 finish_revision 收尾，收尾之后不要再输出正文。
-
-能做的事（不只是改错字）：
-- move_block     把块挪到别的段（结构问题多半是块放错了段），同段内也能用来调先后
-- rewrite_block  原地改写一块（两块要合并：把内容并进一块，再 drop 掉多余那块；要拆分：改写前半段，后半段 add_block）
-- add_block      新增一块（补空段、放拆出来的后半段、补库外知识）
-- drop_block     删掉一块（重复的、没用的、已经并进别块的）
-${allowSplit ? '- split_note     这篇装了两件不相关的事，把次要那几块挪去单独一篇（原篇不再留它们）\n' : ''}- finish_revision 交差（只有它能结束这一轮）
-
-规则：
-- 先读结构诊断再动手。诊断点出来的空段、连续同类型、重复块、放错段，都可以直接处理。
-- 用户可能已经跟你改过几轮：现有块就是上一轮的成品。只做这一轮要求的微调，别把它改好的地方又改回去，也别重复做完的事。
-- 但只挪位置的块（move_block）文字必须一字不改 —— 不许顺手润色、不许改措辞。文字要动就走 rewrite_block，让用户在面板上看得出这块钱变了。
-- 允许重排、允许合并同类块、允许把过长的块拆成几块。
-- 库里相邻的笔记只给了摘要，用来做两件事：① 那边已经写透的结论，这篇别再造一遍，确实相关就在块里用 [[笔记完整标题]] 指过去（标题一字不差，写错就跳不过去）；② 这篇跟相邻笔记说法不一致时，不要自己挑一个，写进 finish_revision 的 advice 留给用户判断。
-- ${NO_FABRICATE_WRITE}
-${outside ? `- 用户允许你用笔记之外的知识补内容。笔记里没写清楚、或者明显缺的那一块，可以直接写进去，但要写成能站住的结论：写清成立条件、适用范围，别只丢一句结论。
+// 这一轮才生效的额外规矩，不写进 md：md 是每次都要守的，这三条看用户开了什么开关
+const REVISE_EXTRA = {
+  split: `还能调 split_note：这篇装了两件不相关的事，把次要那几块挪去单独一篇（原篇不再留它们）。
+- split_note 要克制：只有「这篇真正在讲两件事、拆开后各自更完整」才用。为了看起来整齐而拆细，只会让库更碎。`,
+  outside: `- 用户允许你用笔记之外的知识补内容。笔记里没写清楚、或者明显缺的那一块，可以直接写进去，但要写成能站住的结论：写清成立条件、适用范围，别只丢一句结论。
 - 这类库外内容调工具时带 outside:true，用户能在面板上逐条看到哪些是新知识、再决定要不要。只在 add_block / rewrite_block 上标。
-- 库外内容也要守上面的规矩：不要编具体数字、论文名、公司案例；拿不准的就用 todo 块占位，别硬写。
-` : ''}- 不要输出 heading 块，段落由 section 字段决定。
-- finish_revision 的 title 只在指令明确要求改标题时才给，否则省略。
-- finish_revision 的 advice 只有一句话：跨笔记那部分值得用户注意的事（该指过去的、说法冲突的）。没有就省略。${thinking ? '\n- 每一步只想这一个动作，别在思考里把整篇稿子预演一遍 —— 后面的步骤等看到前一步的结果再想。' : ''}${allowSplit ? '\n- split_note 要克制：只有「这篇真正在讲两件事、拆开后各自更完整」才用。为了看起来整齐而拆细，只会让库更碎。' : ''}`
+- 库外内容也要守上面的规矩：不要编具体数字、论文名、公司案例；拿不准的就用 todo 块占位，别硬写。`,
+  thinking: `- 每一步只想这一个动作，别在思考里把整篇稿子预演一遍 —— 后面的步骤等看到前一步的结果再想。`,
+}
+
+const reviseSystem = (allowSplit, outside, thinking) =>
+  systemFor('revise', {
+    append: [
+      allowSplit && `- ${REVISE_EXTRA.split}`,
+      outside && REVISE_EXTRA.outside,
+      thinking && REVISE_EXTRA.thinking,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  })
 
 /* ---------- 工具：一次只让模型动一块 ---------- */
 

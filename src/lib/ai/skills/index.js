@@ -1,6 +1,11 @@
 // skill 层：一份 skill 一个 md 文件，正文写文档、元信息写 frontmatter。
 // 为什么不写在 JS 里：中文长段落塞进模板字符串要转义反引号和 ${}，
 // 一份 skill 改起来会和别的 skill 混在同一个 diff 里；放进文件还能直接排版。
+//
+// 正文里两类占位符：
+//   {{blockSpec}} / {{noFabricate}} 这类 —— 换成 schema.js、prompts.js 里的常量（见 VARS）
+//   {{includes}}                    —— 换成 frontmatter 里 includes 列的那些 skill 的正文，
+//                                      放在哪儿就在哪儿展开；不写就默认排在正文前面
 
 import { str, BLOCK_SPEC, SECTION_SPEC, OUTSIDE_MARK } from '../schema.js'
 import { NO_FABRICATE, NO_FABRICATE_WRITE } from '../prompts.js'
@@ -58,11 +63,15 @@ for (const [file, raw] of Object.entries(RAW)) {
 }
 
 // includes 先展开、自己后接：先是通用约定，再是这个场景特有的判断
+// 正文里写 {{includes}} 可以指定展开位置（片段是给人读的，排在正文开头会打断前言）
 function bodyOf(id, seen = new Set()) {
   const sk = SKILL_FILES[id]
   if (!sk || seen.has(id)) return ''
   seen.add(id)
-  return [...sk.includes.map((x) => bodyOf(x, seen)), sk.body].filter(Boolean).join('\n\n')
+  const inc = sk.includes.map((x) => bodyOf(x, seen)).filter(Boolean).join('\n\n')
+  if (!sk.body.includes('{{includes}}')) return [inc, sk.body].filter(Boolean).join('\n\n')
+  if (inc) return sk.body.replace('{{includes}}', inc)
+  return sk.body.replace(/\n*\{\{includes\}\}\n*/, '\n').trim()
 }
 
 export const skillBody = (id) => bodyOf(str(id))

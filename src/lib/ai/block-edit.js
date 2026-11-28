@@ -3,8 +3,6 @@
 import { chatStreamTools, loadAI, thinkOn, trimThread, settleThread } from './client.js'
 import {
   SECTIONS,
-  BLOCK_SPEC,
-  SECTION_SPEC,
   str,
   arr,
   bid,
@@ -19,6 +17,7 @@ import {
   AFTER_ARG,
 } from './schema.js'
 import { NO_FABRICATE_WRITE } from './prompts.js'
+import { systemFor } from './skills/index.js'
 
 /* ---------- 改已有块：按块 id 改写 / 删除 / 就地插入 ---------- */
 
@@ -373,27 +372,16 @@ const MAX_BLOCK_THREAD = 15
 // 工具循环的安全阀：正常 2-4 轮就交差，绕圈说明 prompt 或模型跑偏了
 const MAX_BLOCK_ROUNDS = 12
 
-const blockSystem = (thinking, insertOnly) => `你在帮用户改一篇数据分析面试知识笔记，入口是其中一块（下称「原块」），是连续对话：用户会一轮轮提要求，你能看到整篇稿子的当前样子，可以接着改、也可以只回答他的问题。你产出的改动最后会写进这篇笔记。
-${BLOCK_SPEC}
-${SECTION_SPEC}
-
-怎么干：
-- 稿子就是整篇笔记，按文档顺序排，每块都带 id。## 开头的是段落标题，程序按段落生成，别动它。
-- 默认只动原块、以及能补在它旁边的块。用户明确说到别处（「顺带把上面那块也改掉」「把重复的那块删了」「这块挪到推导段」）就照做，跨块跨段都行，用 id 定位。
-- 别顺手重排全文、别改用户没提的块：每改一块都有代价，用户要能一眼看出你动了哪儿。
-- 用工具一块一块改，每调一个工具程序就真改一处，并回你一句结果（改好了，还是 id 打错了），接着调下一个就行，没人催你。
-- 全部改到位后调 finish_block 收尾，收尾之后不要再输出正文。要跟用户说的那句话放在 finish_block 的 say 里（≤60 字，像人说话，别复述字段名；动过好几块就说清动了哪几块）。
-${insertOnly ? '- 这一轮是「在原块后面补内容」：原块一个字都不改，只用 add_block。\n' : ''}
-工具：
-- rewrite_block 改写稿子里的一块：换说法、换块类型、扩写、把两块并成一块都走它
-- add_block    往稿子里加一块：拆出来的后半段、高频问法、踩坑卡、库外补充
-- drop_block   从稿子里去掉一块：重复的、没用的、已经并进别块的
-- finish_block 交差（只有它能结束这一轮）
-
-规则：
-- 用户可能已经跟你聊过几轮：稿子就是上一轮的成品。只做这一轮要求的微调，别把它改好的地方又改回去，也别重复做完的事。
-- 不要输出 heading 块，段落由 section 字段决定；rewrite_block 里给了 section 就是要把这块挪到那一节。
-- ${NO_FABRICATE_WRITE}${thinking ? '\n- 每一步只想这一个动作，别在思考里把整段稿子预演一遍 —— 后面的步骤等看到前一步的结果再想。' : ''}`
+// thinking / insertOnly 是这一轮的开关，不是每轮都守的规矩，所以从 append 拼进去；正文在 skills/block.md
+const blockSystem = (thinking, insertOnly) =>
+  systemFor('block', {
+    append: [
+      insertOnly && '- 这一轮是「在原块后面补内容」：原块一个字都不改，只用 add_block。',
+      thinking && '- 每一步只想这一个动作，别在思考里把整段稿子预演一遍 —— 后面的步骤等看到前一步的结果再想。',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  })
 
 // 「现在这一块长什么样」：把块摊成一行给模型看，省 token
 const blockLine = (b) => `[${b.type}] ${blockText(b)}`

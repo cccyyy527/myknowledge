@@ -6,7 +6,7 @@ import { chat, pickJson } from './client.js'
 import { SECTIONS, BLOCK_SPEC, SECTION_SPEC, str, normalizeBlocks, sectionDumpIssue } from './schema.js'
 import { topicCatalog, topicExists, fallbackTopicId } from './topics.js'
 import { blockText } from './block-edit.js'
-import { NO_FABRICATE_WRITE } from './prompts.js'
+import { systemFor } from './skills/index.js'
 
 /* ---------- L2：一段乱笔记 → 分类 + 分块 + 归段 ---------- */
 
@@ -63,16 +63,8 @@ function noteDigest(note) {
   return { heads, lead: lead.slice(0, 70) }
 }
 
-// 新建还是追加，唯一判据是「已有那篇的标题还概括得了这次内容吗」。
-// 默认偏向复用：库里多一篇讲同一件事的笔记，比一篇什么都塞的大杂烩更难受——
-// 用户搜的时候会命中两篇，读的时候还得自己比对哪篇更新。
-export const FILE_RULE = `新建一篇，还是追加进已有的某一篇 —— 只按一条判据决定：那篇笔记的标题，换成这次的内容还成立吗？
-- 成立（标题就是这个主题，或者那篇里的空小节 / 待补项正好是为这次的内容留的）→ 追加（exist / edit）。这是默认选项。
-- 不成立（只是同一个大领域，把这次的标题换上去就不对了）→ 新建（new）。例：已有《CUPED 方差缩减》，这次讲的是「序贯检验的做法」，才该新建，不要塞进 CUPED 当一节。
-- 这次内容本身能独立成篇、面试时会被单独拎出来问 → 新建，别硬塞进相邻那篇当个小节。
-- 宁可追加到一篇略宽的标题下，也不要制造两篇讲同一件事的笔记：面试前一晚翻库，重复的两篇是要花时间分辨的。
-- 别因为搜到一篇同名空骨架就放弃新建 —— 空骨架只有在标题确实对得上时才填；也别为了「避免重复」把两个不相干的主题硬合并。
-- 判不出来就再读一遍候选那篇的小节：看它缺的正好是这次的内容，就追加。`
+// 新建还是追加、怎么分块，判据在 skills/archive.md 里；这里只补这段代码自己的输出契约。
+// 早先这里有一份 FILE_RULE 常量，和归档 prompt 各说一遍同一个判据，改一处忘一处就会前后打架。
 
 export async function fileAnswer({ question, answer, used = [], cfg, signal } = {}) {
   const notes = liveNotes()
@@ -105,28 +97,22 @@ export async function fileAnswer({ question, answer, used = [], cfg, signal } = 
     return `- ${parts.join('｜')}`
   })
 
-  const system = `你是数据分析面试知识库的归档助手。用户刚问了一个问题并拿到了回答，现在要把这次问答存进知识库。
-你要同时决定两件事：
-1. 该新建一篇笔记，还是追加进已有的某一篇。
-${FILE_RULE}
-2. 把回答重排成结构化知识块，按语义放对段落 —— 不要偷懒把整条答案原样塞进一张问答卡。
-${BLOCK_SPEC}
-${SECTION_SPEC}
+  const system = `${systemFor('archive')}
 
-额外要求：
+## 这一轮的输出形状
+
+上面是判断标准，这一轮的输出是**一个 JSON 对象**，不要写任何解释性文字：
+{"target":"new|exist","title":"...","topicId":"...","noteId":"...","section":"core|detail|qa|pitfall|todo","reason":"...","nearNoteId":"...","nearNoteWhy":"...","blocks":[{"type":"...","section":"...",...}]}
+
 - 回答里的 [1] [2] 这类引用编号原样保留，不要改号、不要新增；让它们落在 paragraph 的 text 或 qa 的 answer 里。
 - 除了真正写成「面试官会这么问 + 我怎么答」的问答卡，其余内容都拆成 paragraph / definition / formula / bulletList / steps / comparison。
-- 每块的 section 按内容语义定，跟这次内容是从一个问答来的无关：别因为用户「问了个问题」就把整条答案都标成 qa。一句能站住的结论进 core，公式 / 前提 / 推导 / 对比进 detail，只有问答卡才进 qa。
+- 每块的 section 按内容语义定，跟这次内容是从一个问答来的无关：别因为用户「问了个问题」就把整条答案都标成 qa。
 - 回答整篇收进来，按内容顺成一条；不要标注哪句是引用、哪句是你自己补的，也不要留任何方括号标签或前缀。
-- 回答里确实成立的通用知识可以收录，但${NO_FABRICATE_WRITE}
 - 列表里只要有一篇笔记的标题能概括这次内容，就必须用 exist，不要因为「新建更干净」而新建。
 - target 为 exist 时，noteId 必须原样复制笔记列表里出现过的 id，段落优先沿用那篇笔记已有的段落标题。
 - target 为 new 时，topicId 必须原样复制分类树里出现过的 id；title 要短，不带书名号。
 - target 为 new 时，nearNoteId 填你最犹豫「是不是该写进它」的那篇（必须是列表里的 id），nearNoteWhy 用一句话说清为什么放不进它。列表为空时这两个留空字符串。
-- reason 用一句话说明为什么这么归类，会展示给用户看；新建时要把「和《某篇》比，差在哪」写进这句里。
-
-只输出一个 JSON 对象：
-{"target":"new|exist","title":"...","topicId":"...","noteId":"...","section":"core|detail|qa|pitfall|todo","reason":"...","nearNoteId":"...","nearNoteWhy":"...","blocks":[{"type":"...","section":"...",...}]}`
+- reason 用一句话说明为什么这么归类，会展示给用户看；新建时要把「和《某篇》比，差在哪」写进这句里。`
 
   const user = `分类树：\n${topicCatalog()}\n\n已有笔记（id｜标题｜位置｜段落｜开头）：\n${lines.join('\n') || '（还没有笔记）'}\n\n用户这次问的问题：\n${question}\n\n回答：\n${answer}`
 

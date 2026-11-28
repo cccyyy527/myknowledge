@@ -15,6 +15,9 @@ const emit = defineEmits(['remove', 'move', 'ai', 'insert', 'insertBefore'])
 // level 2 是小节标题（能整节删、整节挪），level 3 是段内的小标题
 const isSectionHead = computed(() => props.block.type === 'heading' && (props.block.level || 2) === 2)
 
+// 左侧 ⠿ 展开的操作菜单（上移 / 下移 / 改写 / 删除）
+const menuOpen = ref(false)
+
 const preview = computed(() => {
   if (props.block.type !== 'formula' || !props.block.latex) return ''
   if (!mathReady.value) loadMath()
@@ -138,24 +141,36 @@ const LABELS = {
 </script>
 
 <template>
-  <div class="ed-row" :class="'ed-' + block.type" :data-bid="block.id">
-    <div class="ed-label">
-      <span>{{ isSectionHead ? '小节标题' : LABELS[block.type] || block.type }}</span>
-      <span class="ed-actions">
-        <button title="在这块前 / 后插内容" @click="emit('insertBefore')">＋</button>
-        <button v-if="block.type !== 'heading'" class="ed-ai" title="用 AI 改写这一块" @click="emit('ai')">
-          ✨
-        </button>
-        <button title="上移" @click="emit('move', -1)">↑</button>
-        <button title="下移" @click="emit('move', 1)">↓</button>
-        <button
-          v-if="deletable"
-          :title="isSectionHead ? '删掉这一节（含里面的块）' : '删除'"
-          @click="emit('remove')"
-        >
-          ×
-        </button>
-      </span>
+  <div class="ed-row" :class="['ed-' + block.type, { 'is-head': isSectionHead }]" :data-bid="block.id">
+    <div class="ed-gutter">
+      <span class="ed-type">{{ isSectionHead ? '小节标题' : LABELS[block.type] || block.type }}</span>
+      <button
+        class="ed-grip"
+        :class="{ on: menuOpen }"
+        :title="isSectionHead ? '这一节的操作' : '这一块的操作'"
+        @click.stop="menuOpen = !menuOpen"
+      >
+        ⠿
+      </button>
+      <button title="在这块前面插一块" @click.stop="emit('insertBefore')">＋</button>
+
+      <template v-if="menuOpen">
+        <div class="ed-menu-mask" @click="menuOpen = false"></div>
+        <div class="ed-menu">
+          <button @click="menuOpen = false; emit('move', -1)">
+            {{ isSectionHead ? '↑ 整节上移' : '↑ 上移' }}
+          </button>
+          <button @click="menuOpen = false; emit('move', 1)">
+            {{ isSectionHead ? '↓ 整节下移' : '↓ 下移' }}
+          </button>
+          <button v-if="block.type !== 'heading'" @click="menuOpen = false; emit('ai')">
+            ✨ 用 AI 改写
+          </button>
+          <button v-if="deletable" class="danger" @click="menuOpen = false; emit('remove')">
+            × {{ isSectionHead ? '删掉这一节' : '删掉这一块' }}
+          </button>
+        </div>
+      </template>
     </div>
 
     <template v-if="block.type === 'heading'">

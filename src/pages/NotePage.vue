@@ -198,16 +198,16 @@ const sectionEndAt = (section) => {
   return blocks.length
 }
 
-const spliceAtSectionEnd = (section, patch) => {
-  if (!note.value) return
-  note.value.blocks.splice(sectionEndAt(section), 0, { id: newBlockId(), ...patch })
-}
-
 const addBlock = (type, section) => {
   const def = ADD.find((a) => a[0] === type)
   if (!def || !note.value) return
-  spliceAtSectionEnd(section, { type, ...structuredClone(def[2]) })
+  const b = { id: newBlockId(), type, ...structuredClone(def[2]) }
+  note.value.blocks.splice(sectionEndAt(section), 0, b)
+  nextTick(() => focusBlock(b.id))
 }
+
+// 段尾「＋ 添加块」的类型浮层同一时刻只开一个：记着是第几节
+const adderAt = ref(-1)
 
 const moveBlock = (i, delta) => {
   const arr = note.value.blocks
@@ -334,6 +334,13 @@ const sectionTitleOf = (index) => {
 const openAi = (index) => {
   const b = note.value.blocks[index]
   aiTarget.value = { index, block: b, sectionTitle: sectionTitleOf(index) }
+}
+
+/* AI 写完接受后停回阅读态（方便马上看结果），并且保住当前看的位置 ——
+   以前这里是切到编辑态，等于每次接受完都被丢进一堆表单里。 */
+const afterApplyAi = () => {
+  holdPos = true
+  mode.value = 'read'
 }
 
 // 插到某个段落的末尾；没有这一段就在文末新起一段
@@ -627,23 +634,39 @@ const brokenHere = computed(() => {
             @insert-before="openInsert(it.index)"
           />
           <div class="adder">
-            <span class="adder-label">在此段加</span>
-            <button v-for="a in ADD" :key="a[0]" class="chip-btn" @click="addBlock(a[0], sec)">
-              + {{ a[1] }}
+            <button
+              class="adder-btn"
+              :class="{ on: adderAt === si }"
+              @click="adderAt = adderAt === si ? -1 : si"
+            >
+              ＋ 添加块
             </button>
-            <button class="chip-btn" title="截图 → 公式，不用手打" @click="openOcr(sec)">
-              📷 识图
-            </button>
-            <button class="chip-btn" title="在这一节后面新起一节" @click="addSection(sec)">
-              ⁝ 新小节
-            </button>
+            <template v-if="adderAt === si">
+              <div class="ed-menu-mask" @click="adderAt = -1"></div>
+              <div class="adder-pop">
+                <button
+                  v-for="a in ADD"
+                  :key="a[0]"
+                  class="chip-btn"
+                  @click="addBlock(a[0], sec); adderAt = -1"
+                >
+                  {{ a[1] }}
+                </button>
+                <button class="chip-btn" title="截图 → 公式，不用手打" @click="adderAt = -1; openOcr(sec)">
+                  📷 识图
+                </button>
+                <button class="chip-btn" title="在这一节后面新起一节" @click="adderAt = -1; addSection(sec)">
+                  ⁝ 新小节
+                </button>
+              </div>
+            </template>
           </div>
         </section>
 
         <div class="ed-section-add">
           <button class="chip-btn" @click="addSection(null)">+ 在文末新起一节</button>
           <span class="muted">
-            小节就是二级标题，段内想再分层就加「小标题」（三级）；不想要的节点标题那行的 × 删掉。要在两块之间插，点上面那块的 ＋ 选「插在后面」（或下面那块的 ＋ 选「插在前面」）
+            段内想再分层就加「小标题」；不想要的节点左侧 ⠿ → 删掉。要在两块之间插，点左侧 ＋
           </span>
         </div>
       </div>
@@ -741,7 +764,7 @@ const brokenHere = computed(() => {
       :open="wholeAi"
       :note="note"
       @close="wholeAi = false"
-      @applied="mode = 'edit'"
+      @applied="afterApplyAi"
     />
 
     <OcrDialog

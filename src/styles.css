@@ -217,7 +217,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 
 .blocks { display: flex; flex-direction: column; gap: 16px; }
 .blk-h2 { font-size: 17px; margin: 14px 0 0; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
-.blk-h3 { font-size: 15px; margin: 8px 0 0; }
+.blk-h3 { font-size: 15px; font-weight: 650; margin: 10px 0 0; }
 .blk-p { margin: 0; }
 
 .blk-callout {
@@ -367,15 +367,17 @@ code { font-family: var(--mono); font-size: 0.9em; }
   overflow-wrap: break-word;
 }
 
-/* 正文里的 **加粗** 和 `行内代码` */
+/* 正文里的 **加粗** 和 `行内代码`：凡是 v-html 出去的富文本都挂 .rt，规则集中在这里 */
 .blk-p strong,
 .def-text strong,
 .def-detail strong,
 .qa-a strong,
-.blk-callout strong {
+.blk-callout strong,
+.rt strong {
   font-weight: 650;
   color: var(--ink);
 }
+.rt .inline-code,
 .blk-p .inline-code,
 .def-text .inline-code,
 .def-detail .inline-code,
@@ -386,6 +388,14 @@ code { font-family: var(--mono); font-size: 0.9em; }
   background: #f1f0ed;
   border-radius: 4px;
   padding: 0 4px;
+}
+/* 标题、图注这类本身已经偏粗的地方，靠颜色加深而不是再加粗 */
+.blk-h2 strong,
+.blk-h3 strong,
+.steps-title strong,
+.def-term strong,
+.cmp-head strong {
+  color: var(--ink);
 }
 
 /* ---------- editor ---------- */
@@ -404,6 +414,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .inp:focus { border-color: var(--accent); background: #fff; }
 .inp + .inp { margin-top: 0; }
 .inp-heading { font-size: 16px; font-weight: 650; }
+.inp-subhead { font-size: 14px; font-weight: 650; }
 .inp-mono { font-family: var(--mono); font-size: 12.5px; }
 .inp-mini { width: auto; min-width: 110px; }
 .inp-text { line-height: 1.6; }

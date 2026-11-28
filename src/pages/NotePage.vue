@@ -174,6 +174,7 @@ const sections = computed(() => {
 })
 
 const ADD = [
+  ['heading', '小标题', { level: 3, text: '' }],
   ['definition', '概念', { term: '', text: '', detail: '' }],
   ['formula', '公式', { latex: '', text: '' }],
   ['comparison', '对比', { left: '方案 A', right: '方案 B', rows: [{ k: '', a: '', b: '' }] }],
@@ -212,7 +213,8 @@ const moveBlock = (i, delta) => {
   const arr = note.value.blocks
   const j = i + delta
   if (j < 0 || j >= arr.length) return
-  if (arr[j].type === 'heading') return
+  // 大标题（level 2）是小节边界，普通块别跨过去；小标题（level 3）可以随便挪
+  if (arr[j].type === 'heading' && (arr[j].level || 2) === 2) return
   ;[arr[i], arr[j]] = [arr[j], arr[i]]
 }
 
@@ -231,7 +233,7 @@ const openInsert = (index) => {
 
 const blockLabel = (b) => {
   if (!b) return '这一块'
-  if (b.type === 'heading') return '小节标题'
+  if (b.type === 'heading') return (b.level || 2) === 2 ? '小节标题' : '小标题'
   return ADD.find((a) => a[0] === b.type)?.[1] || b.type
 }
 
@@ -641,7 +643,7 @@ const brokenHere = computed(() => {
         <div class="ed-section-add">
           <button class="chip-btn" @click="addSection(null)">+ 在文末新起一节</button>
           <span class="muted">
-            小节就是二级标题；不想要的节点标题那行的 × 删掉。要在两块之间插，点上面那块的 ＋ 选「插在后面」（或下面那块的 ＋ 选「插在前面」）
+            小节就是二级标题，段内想再分层就加「小标题」（三级）；不想要的节点标题那行的 × 删掉。要在两块之间插，点上面那块的 ＋ 选「插在后面」（或下面那块的 ＋ 选「插在前面」）
           </span>
         </div>
       </div>

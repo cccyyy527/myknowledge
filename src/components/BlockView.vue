@@ -73,6 +73,7 @@ const htmlOf = (text) => {
   // **加粗** / `行内代码`：跟问答面板里 rich() 的写法保持一致
   s = s.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>')
   s = s.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
+  // 单下划线/星号那种「斜体」不认：ρ、a*b、2*3 这类正文太多，容易误伤
   // 换行：先转成 <br> 再交给 pre-wrap，两处都不落空
   return s.replace(/\n/g, '<br />')
 }
@@ -84,6 +85,10 @@ const todoHtml = computed(() => (props.block.type === 'todo' ? htmlOf(props.bloc
 const defHtml = computed(() => (props.block.type === 'definition' ? htmlOf(props.block.text) : ''))
 const defDetailHtml = computed(() => (props.block.type === 'definition' ? htmlOf(props.block.detail) : ''))
 
+// 加粗不是纯文本块才有的待遇：标题、步骤、对比表、坑、公式图注里的 **也一样要认
+const textHtml = computed(() => htmlOf(props.block.text))
+const termHtml = computed(() => htmlOf(props.block.term))
+
 const onLinkClick = (e) => {
   const el = e.target.closest?.('.qa-cite, .note-link')
   if (!el) return
@@ -93,19 +98,19 @@ const onLinkClick = (e) => {
 </script>
 
 <template>
-  <h2 v-if="block.type === 'heading' && block.level === 2" class="blk-h2">{{ block.text }}</h2>
-  <h3 v-else-if="block.type === 'heading'" class="blk-h3">{{ block.text }}</h3>
+  <h2 v-if="block.type === 'heading' && block.level === 2" class="blk-h2 rt" v-html="textHtml"></h2>
+  <h3 v-else-if="block.type === 'heading'" class="blk-h3 rt" v-html="textHtml"></h3>
 
-  <p v-else-if="block.type === 'paragraph'" class="blk-p" @click="onLinkClick" v-html="paraHtml"></p>
+  <p v-else-if="block.type === 'paragraph'" class="blk-p rt" @click="onLinkClick" v-html="paraHtml"></p>
 
-  <aside v-else-if="block.type === 'callout'" class="blk-callout" :class="'tone-' + (block.tone || 'tip')">
+  <aside v-else-if="block.type === 'callout'" class="blk-callout rt" :class="'tone-' + (block.tone || 'tip')">
     <span class="callout-icon">{{ block.tone === 'warn' ? '!' : 'i' }}</span>
     <span @click="onLinkClick" v-html="calloutHtml"></span>
   </aside>
 
   <figure v-else-if="block.type === 'formula'" class="blk-formula">
     <div class="formula-body" v-html="html"></div>
-    <figcaption v-if="block.text">{{ block.text }}</figcaption>
+    <figcaption v-if="block.text" class="rt" v-html="textHtml"></figcaption>
   </figure>
 
   <figure v-else-if="block.type === 'image'" class="blk-img">
@@ -121,55 +126,55 @@ const onLinkClick = (e) => {
       <span>{{ block.src ? '图没加载出来，链接可能失效或不许外链' : '还没填图片链接' }}</span>
       <a v-if="block.src" :href="block.src" target="_blank" rel="noreferrer">打开原图</a>
     </div>
-    <figcaption v-if="block.text">{{ block.text }}</figcaption>
+    <figcaption v-if="block.text" class="rt" v-html="textHtml"></figcaption>
   </figure>
 
   <div v-else-if="block.type === 'definition'" class="blk-def">
-    <div class="def-term">{{ block.term || '术语' }}</div>
+    <div class="def-term rt" v-html="termHtml"></div>
     <div class="def-text" @click="onLinkClick" v-html="defHtml"></div>
     <div v-if="block.detail" class="def-detail" @click="onLinkClick" v-html="defDetailHtml"></div>
   </div>
 
   <div v-else-if="block.type === 'steps'" class="blk-steps">
-    <div v-if="block.text" class="steps-title">{{ block.text }}</div>
+    <div v-if="block.text" class="steps-title rt" v-html="textHtml"></div>
     <ol>
-      <li v-for="(s, i) in block.items || []" :key="i">{{ s }}</li>
+      <li v-for="(s, i) in block.items || []" :key="i" v-html="htmlOf(s)"></li>
     </ol>
   </div>
 
-  <div v-else-if="block.type === 'comparison'" class="blk-cmp">
+  <div v-else-if="block.type === 'comparison'" class="blk-cmp rt">
     <div class="cmp-head">
       <span></span>
-      <span class="cmp-a">{{ block.left }}</span>
-      <span class="cmp-b">{{ block.right }}</span>
+      <span class="cmp-a" v-html="htmlOf(block.left)"></span>
+      <span class="cmp-b" v-html="htmlOf(block.right)"></span>
     </div>
     <div v-for="(r, i) in block.rows || []" :key="i" class="cmp-row">
-      <span class="cmp-k">{{ r.k }}</span>
-      <span>{{ r.a }}</span>
-      <span>{{ r.b }}</span>
+      <span class="cmp-k" v-html="htmlOf(r.k)"></span>
+      <span v-html="htmlOf(r.a)"></span>
+      <span v-html="htmlOf(r.b)"></span>
     </div>
   </div>
 
   <details v-else-if="block.type === 'qa'" class="blk-qa" :open="expand">
-    <summary><span class="qa-badge">Q</span>{{ block.question || '（未填问题）' }}</summary>
+    <summary><span class="qa-badge">Q</span><span class="rt" v-html="htmlOf(block.question || '（未填问题）')"></span></summary>
     <div class="qa-a" @click="onLinkClick" v-html="qaHtml"></div>
   </details>
 
-  <div v-else-if="block.type === 'pitfall'" class="blk-pitfall">
+  <div v-else-if="block.type === 'pitfall'" class="blk-pitfall rt">
     <div class="pit-title">坑</div>
-    <div class="pit-row"><span class="pit-k">现象</span><span>{{ block.text }}</span></div>
-    <div v-if="block.cause" class="pit-row"><span class="pit-k">原因</span><span>{{ block.cause }}</span></div>
-    <div v-if="block.avoid" class="pit-row"><span class="pit-k">避免</span><span>{{ block.avoid }}</span></div>
+    <div class="pit-row"><span class="pit-k">现象</span><span v-html="textHtml"></span></div>
+    <div v-if="block.cause" class="pit-row"><span class="pit-k">原因</span><span v-html="htmlOf(block.cause)"></span></div>
+    <div v-if="block.avoid" class="pit-row"><span class="pit-k">避免</span><span v-html="htmlOf(block.avoid)"></span></div>
   </div>
 
-  <div v-else-if="block.type === 'todo'" class="blk-todo">
+  <div v-else-if="block.type === 'todo'" class="blk-todo rt">
     <span class="todo-mark">待补</span><span @click="onLinkClick" v-html="todoHtml"></span>
   </div>
 
   <pre v-else-if="block.type === 'code'" class="blk-code"><code>{{ block.text }}</code></pre>
 
-  <ul v-else-if="block.type === 'bulletList'" class="blk-list">
-    <li v-for="(it, i) in block.items || []" :key="i">{{ it }}</li>
+  <ul v-else-if="block.type === 'bulletList'" class="blk-list rt">
+    <li v-for="(it, i) in block.items || []" :key="i" v-html="htmlOf(it)"></li>
   </ul>
 
   <hr v-else-if="block.type === 'divider'" />

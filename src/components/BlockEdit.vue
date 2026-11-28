@@ -12,6 +12,9 @@ const props = defineProps({
 })
 const emit = defineEmits(['remove', 'move', 'ai', 'insert', 'insertBefore'])
 
+// level 2 是小节标题（能整节删、整节挪），level 3 是段内的小标题
+const isSectionHead = computed(() => props.block.type === 'heading' && (props.block.level || 2) === 2)
+
 const preview = computed(() => {
   if (props.block.type !== 'formula' || !props.block.latex) return ''
   if (!mathReady.value) loadMath()
@@ -119,7 +122,7 @@ const ocrOpen = ref(false)
 
 const LABELS = {
   paragraph: '段落',
-  heading: '小节标题',
+  heading: '小标题',
   callout: '提示',
   formula: '公式',
   definition: '概念',
@@ -137,7 +140,7 @@ const LABELS = {
 <template>
   <div class="ed-row" :class="'ed-' + block.type" :data-bid="block.id">
     <div class="ed-label">
-      <span>{{ LABELS[block.type] || block.type }}</span>
+      <span>{{ isSectionHead ? '小节标题' : LABELS[block.type] || block.type }}</span>
       <span class="ed-actions">
         <button title="在这块前 / 后插内容" @click="emit('insertBefore')">＋</button>
         <button v-if="block.type !== 'heading'" class="ed-ai" title="用 AI 改写这一块" @click="emit('ai')">
@@ -147,7 +150,7 @@ const LABELS = {
         <button title="下移" @click="emit('move', 1)">↓</button>
         <button
           v-if="deletable"
-          :title="block.type === 'heading' ? '删掉这一节（含里面的块）' : '删除'"
+          :title="isSectionHead ? '删掉这一节（含里面的块）' : '删除'"
           @click="emit('remove')"
         >
           ×
@@ -156,7 +159,12 @@ const LABELS = {
     </div>
 
     <template v-if="block.type === 'heading'">
-      <input v-model="block.text" class="inp inp-heading" placeholder="小节标题" />
+      <input
+        v-model="block.text"
+        class="inp"
+        :class="isSectionHead ? 'inp-heading' : 'inp-subhead'"
+        :placeholder="isSectionHead ? '小节标题' : '小标题'"
+      />
     </template>
 
     <template v-else-if="block.type === 'paragraph'">
